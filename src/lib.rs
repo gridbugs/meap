@@ -6,29 +6,15 @@ use std::str::FromStr;
 #[derive(Debug)]
 pub enum ParseError {
     UnexpectedFreeArgument(String),
-    UnknownLong(String),
-    UnknownShort(char),
-    MissingArgumentForLong(String),
-    MissingArgumentForShort(char),
+    UnknownSwitch(Switch),
+    MissingArgument(Switch),
     OptInFlagSequence(char),
 }
 
 enum Name {
-    Short(char),
-    Long(String),
+    Single(Switch),
     Both { short: char, long: String },
     Free,
-}
-
-impl Name {
-    fn instance_name(&self) -> InstanceName {
-        match self {
-            Self::Short(short) => InstanceName::Short(*short),
-            Self::Long(long) => InstanceName::Long(long.clone()),
-            Self::Both { short, .. } => InstanceName::Short(*short),
-            Self::Free => InstanceName::Free,
-        }
-    }
 }
 
 pub trait Parser: Sized {
@@ -40,15 +26,15 @@ struct Flag {
     description: Option<String>,
 }
 
-impl Parser for Flag {
-    type Item = bool;
-}
-
 struct Opt<T: FromStr> {
     name: Name,
     description: Option<String>,
     hint: Option<String>,
     typ: PhantomData<T>,
+}
+
+impl Parser for Flag {
+    type Item = bool;
 }
 
 impl<T: FromStr> Parser for Opt<T> {
@@ -110,20 +96,12 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     type Item = U;
 }
 
-#[derive(Hash, PartialEq, Eq)]
-enum InstanceName {
-    Short(char),
-    Long(String),
-    Free,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FlagOrOpt {
     Flag,
     Opt,
 }
 
-#[derive(Clone, Copy)]
 struct LowLevelArgRef {
     index: usize,
     flag_or_opt: FlagOrOpt,
@@ -131,15 +109,48 @@ struct LowLevelArgRef {
 
 #[derive(Default)]
 struct LowLevelParser {
-    instance_name_to_arg_ref: HashMap<InstanceName, LowLevelArgRef>,
+    instance_name_to_arg_ref: HashMap<Switch, LowLevelArgRef>,
     flag_count: usize,
     opt_count: usize,
+    allow_frees: bool,
 }
 
 struct LowLevelParserOutput {
-    instance_name_to_arg_ref: HashMap<InstanceName, LowLevelArgRef>,
+    instance_name_to_arg_ref: HashMap<Switch, LowLevelArgRef>,
     flags: Vec<u32>,
     opts: Vec<Vec<String>>,
+    frees: Vec<String>,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub enum Switch {
+    Long(String),
+    Short(char),
+}
+
+enum Token {
+    Switch(Switch),
+    ShortSequence(String),
+    Word(String),
+    Separator,
+}
+
+impl Token {
+    fn parse(s: String) -> Self {
+        if s == "--" {
+            Token::Separator
+        } else if let Some(long) = s.strip_prefix("--") {
+            Token::Switch(Switch::Long(long.to_string()))
+        } else if let Some(shorts) = s.strip_prefix("-") {
+            match shorts.len() {
+                0 => Token::Word("-".to_string()),
+                1 => Token::Switch(Switch::Short(shorts.chars().next().unwrap())),
+                _ => Token::ShortSequence(shorts.to_string()),
+            }
+        } else {
+            Token::Word(s)
+        }
+    }
 }
 
 impl LowLevelParser {
@@ -151,112 +162,57 @@ impl LowLevelParser {
             instance_name_to_arg_ref,
             flag_count,
             opt_count,
+            allow_frees,
         } = self;
         let mut flags = vec![0; flag_count];
         let mut opts = Vec::with_capacity(opt_count);
         opts.resize_with(opt_count, Vec::new);
+        let mut frees = Vec::new();
         let mut args_iter = args.into_iter();
-        let free_opt_index = instance_name_to_arg_ref.get(&InstanceName::Free).map(
-            |&LowLevelArgRef { index, flag_or_opt }| {
-                debug_assert!(flag_or_opt == FlagOrOpt::Opt);
-                index
-            },
-        );
-        let mut current_argument_instance_name = InstanceName::Free;
-        let mut interpret_next_free_as = free_opt_index;
-        while let Some(arg) = args_iter.next() {
-            if arg == "--" {
-                break;
-            }
-            if let Some(long) = arg.strip_prefix("--") {
-                match current_argument_instance_name {
-                    InstanceName::Long(long) => {
-                        return Err(ParseError::MissingArgumentForLong(long))
-                    }
-                    InstanceName::Short(short) => {
-                        return Err(ParseError::MissingArgumentForShort(short))
-                    }
-                    InstanceName::Free => (),
-                }
-                let instance_name = InstanceName::Long(long.to_string());
-                let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
-                    .get(&instance_name)
-                    .ok_or_else(|| ParseError::UnknownLong(long.to_string()))?;
-                match flag_or_opt {
-                    FlagOrOpt::Flag => flags[*index] += 1,
-                    FlagOrOpt::Opt => {
-                        current_argument_instance_name = instance_name;
-                        interpret_next_free_as = Some(*index);
+        while let Some(token) = args_iter.next().map(Token::parse) {
+            match token {
+                Token::Separator => break,
+                Token::Word(word) => {
+                    if allow_frees {
+                        frees.push(word);
+                    } else {
+                        return Err(ParseError::UnexpectedFreeArgument(word));
                     }
                 }
-                continue;
-            } else if let Some(shorts) = arg.strip_prefix("-") {
-                match shorts.len() {
-                    0 => (),
-                    1 => {
-                        match current_argument_instance_name {
-                            InstanceName::Long(long) => {
-                                return Err(ParseError::MissingArgumentForLong(long))
-                            }
-                            InstanceName::Short(short) => {
-                                return Err(ParseError::MissingArgumentForShort(short))
-                            }
-                            InstanceName::Free => (),
-                        }
-                        let short = shorts.chars().next().unwrap();
-                        let instance_name = InstanceName::Short(short);
+                Token::ShortSequence(shorts) => {
+                    for short in shorts.chars() {
                         let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
-                            .get(&instance_name)
-                            .ok_or_else(|| ParseError::UnknownShort(short))?;
+                            .get(&Switch::Short(short))
+                            .ok_or_else(|| ParseError::UnknownSwitch(Switch::Short(short)))?;
                         match flag_or_opt {
                             FlagOrOpt::Flag => flags[*index] += 1,
-                            FlagOrOpt::Opt => {
-                                current_argument_instance_name = instance_name;
-                                interpret_next_free_as = Some(*index);
-                            }
+                            FlagOrOpt::Opt => return Err(ParseError::OptInFlagSequence(short)),
                         }
-                        continue;
                     }
-                    _multiple => {
-                        match current_argument_instance_name {
-                            InstanceName::Long(long) => {
-                                return Err(ParseError::MissingArgumentForLong(long))
-                            }
-                            InstanceName::Short(short) => {
-                                return Err(ParseError::MissingArgumentForShort(short))
-                            }
-                            InstanceName::Free => (),
-                        }
-                        for short in shorts.chars() {
-                            let instance_name = InstanceName::Short(short);
-                            let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
-                                .get(&instance_name)
-                                .ok_or_else(|| ParseError::UnknownShort(short))?;
-                            match flag_or_opt {
-                                FlagOrOpt::Flag => flags[*index] += 1,
-                                FlagOrOpt::Opt => return Err(ParseError::OptInFlagSequence(short)),
+                }
+                Token::Switch(switch) => {
+                    let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
+                        .get(&switch)
+                        .ok_or_else(|| ParseError::UnknownSwitch(switch.clone()))?;
+                    match flag_or_opt {
+                        FlagOrOpt::Flag => flags[*index] += 1,
+                        FlagOrOpt::Opt => {
+                            match Token::parse(
+                                args_iter
+                                    .next()
+                                    .ok_or_else(|| ParseError::MissingArgument(switch.clone()))?,
+                            ) {
+                                Token::Word(word) => opts[*index].push(word),
+                                _ => return Err(ParseError::MissingArgument(switch)),
                             }
                         }
-                        continue;
                     }
                 }
             }
-            if let Some(index) = interpret_next_free_as {
-                opts[index].push(arg);
-            } else {
-                return Err(ParseError::UnexpectedFreeArgument(arg));
-            }
-            current_argument_instance_name = InstanceName::Free;
-            interpret_next_free_as = free_opt_index;
         }
-        match current_argument_instance_name {
-            InstanceName::Long(long) => return Err(ParseError::MissingArgumentForLong(long)),
-            InstanceName::Short(short) => return Err(ParseError::MissingArgumentForShort(short)),
-            InstanceName::Free => (),
-        }
-        if let Some(index) = free_opt_index {
+        if allow_frees {
             for arg in args_iter {
-                opts[index].push(arg);
+                frees.push(arg);
             }
         } else if let Some(arg) = args_iter.next() {
             return Err(ParseError::UnexpectedFreeArgument(arg));
@@ -265,26 +221,23 @@ impl LowLevelParser {
             instance_name_to_arg_ref,
             flags,
             opts,
+            frees,
         })
     }
 }
 
 impl LowLevelParserOutput {
-    fn get_flag(&self, name: &Name) -> u32 {
-        let LowLevelArgRef { index, flag_or_opt } = self
-            .instance_name_to_arg_ref
-            .get(&name.instance_name())
-            .unwrap();
-        debug_assert!(*flag_or_opt == FlagOrOpt::Flag);
+    fn get_flag(&self, switch: &Switch) -> u32 {
+        let LowLevelArgRef { index, flag_or_opt } =
+            self.instance_name_to_arg_ref.get(switch).unwrap();
+        assert!(*flag_or_opt == FlagOrOpt::Flag);
         self.flags[*index]
     }
 
-    fn get_opt(&self, name: &Name) -> &[String] {
-        let LowLevelArgRef { index, flag_or_opt } = self
-            .instance_name_to_arg_ref
-            .get(&name.instance_name())
-            .unwrap();
-        debug_assert!(*flag_or_opt == FlagOrOpt::Opt);
+    fn get_opt(&self, switch: &Switch) -> &[String] {
+        let LowLevelArgRef { index, flag_or_opt } =
+            self.instance_name_to_arg_ref.get(switch).unwrap();
+        assert!(*flag_or_opt == FlagOrOpt::Opt);
         &self.opts[*index]
     }
 }
