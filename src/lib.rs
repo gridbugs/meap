@@ -13,8 +13,14 @@ pub enum ParseError {
     UnknownSwitch(Switch),
     MissingArgument(Switch),
     OptInFlagSequence(char),
-    ExpectedAtMostOne { name: Option<Name>, found: usize },
-    FailedToParse { name: Option<Name>, value: String },
+    ExpectedAtMostOne {
+        switches: Vec<Switch>,
+        found: usize,
+    },
+    FailedToParse {
+        switches: Vec<Switch>,
+        value: String,
+    },
 }
 
 #[derive(Debug)]
@@ -23,31 +29,16 @@ pub enum SpecError {
     SwitchUsedMultipeTimes(Switch),
 }
 
-#[derive(Debug, Clone)]
-pub enum Name {
-    Single(Switch),
-    Double { short: char, long: String },
-}
-
-impl Name {
-    fn switch(&self) -> Switch {
-        match self {
-            Self::Single(switch) => switch.clone(),
-            Self::Double { short, .. } => Switch::Short(*short),
-        }
-    }
-}
-
 pub trait Parser: Sized {
     type Item;
 
-    fn traverse<F: FnMut(Option<&Name>, low_level::FlagOrOpt)>(&self, f: F);
+    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, f: F);
 
     fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
         let mut result = Ok(());
-        self.traverse(|maybe_name, flag_or_opt| {
+        self.traverse(|switches, flag_or_opt| {
             if result.is_ok() {
-                result = ll.register(maybe_name, flag_or_opt);
+                result = ll.register(switches, flag_or_opt);
             }
         });
         result
@@ -57,12 +48,12 @@ pub trait Parser: Sized {
 }
 
 struct Flag {
-    name: Name,
+    switches: Vec<Switch>,
     description: Option<String>,
 }
 
 struct Opt<T: FromStr> {
-    name: Option<Name>,
+    switches: Vec<Switch>,
     description: Option<String>,
     hint: Option<String>,
     typ: PhantomData<T>,
@@ -71,51 +62,24 @@ struct Opt<T: FromStr> {
 impl Parser for Flag {
     type Item = bool;
 
-    fn traverse<F: FnMut(Option<&Name>, low_level::FlagOrOpt)>(&self, mut f: F) {
-        f(Some(&self.name), low_level::FlagOrOpt::Flag);
+    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
+        f(&self.switches, low_level::FlagOrOpt::Flag);
     }
 
     fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
-        let output = ll.get_flag(&self.name.switch());
-        if output > 1 {
-            return Err(ParseError::ExpectedAtMostOne {
-                found: output,
-                name: Some(self.name.clone()),
-            });
-        }
-        Ok(output == 1)
+        todo!()
     }
 }
 
 impl<T: FromStr> Parser for Opt<T> {
     type Item = Option<T>;
 
-    fn traverse<F: FnMut(Option<&Name>, low_level::FlagOrOpt)>(&self, mut f: F) {
-        f(self.name.as_ref(), low_level::FlagOrOpt::Opt);
+    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
+        f(&self.switches, low_level::FlagOrOpt::Opt);
     }
 
     fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
-        let output = if let Some(name) = self.name.as_ref() {
-            ll.get_opt(&name.switch())
-        } else {
-            ll.get_free()
-        };
-        if output.len() > 1 {
-            return Err(ParseError::ExpectedAtMostOne {
-                found: output.len() as usize,
-                name: self.name.clone(),
-            });
-        }
-        if let Some(first) = output.first() {
-            Ok(Some(first.parse().map_err(|_| {
-                ParseError::FailedToParse {
-                    name: self.name.clone(),
-                    value: first.clone(),
-                }
-            })?))
-        } else {
-            Ok(None)
-        }
+        todo!()
     }
 }
 
@@ -127,7 +91,7 @@ struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {
 impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT, PU> {
     type Item = (T, U);
 
-    fn traverse<F: FnMut(Option<&Name>, low_level::FlagOrOpt)>(&self, mut f: F) {
+    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
         self.parser_t.traverse(&mut f);
         self.parser_u.traverse(&mut f);
     }
@@ -145,7 +109,7 @@ struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> {
     type Item = U;
 
-    fn traverse<G: FnMut(Option<&Name>, low_level::FlagOrOpt)>(&self, mut f: G) {
+    fn traverse<G: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: G) {
         self.parser_t.traverse(&mut f);
     }
 
@@ -155,7 +119,7 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
 }
 
 pub mod low_level {
-    use super::{Name, ParseError, SpecError, Switch};
+    use super::{ParseError, SpecError, Switch};
     use std::collections::HashMap;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -224,46 +188,30 @@ pub mod low_level {
         }
         pub fn register(
             &mut self,
-            name: Option<&Name>,
+            switches: &[Switch],
             flag_or_opt: FlagOrOpt,
         ) -> Result<(), SpecError> {
-            match name {
-                None => {
-                    assert!(flag_or_opt == FlagOrOpt::Opt);
-                    if self.allow_frees {
-                        return Err(SpecError::MultipleFreeArguments);
-                    }
-                    self.allow_frees = true;
+            if switches.is_empty() {
+                assert!(flag_or_opt == FlagOrOpt::Opt);
+                if self.allow_frees {
+                    return Err(SpecError::MultipleFreeArguments);
                 }
-                Some(name) => {
-                    let index = match flag_or_opt {
-                        FlagOrOpt::Flag => &mut self.flag_count,
-                        FlagOrOpt::Opt => &mut self.opt_count,
-                    };
-                    let arg_ref = LowLevelArgRef {
-                        index: *index,
-                        flag_or_opt,
-                    };
-                    match name {
-                        Name::Single(switch) => Self::register_switch(
-                            &mut self.instance_name_to_arg_ref,
-                            switch,
-                            arg_ref,
-                        )?,
-                        Name::Double { short, long } => {
-                            Self::register_switch(
-                                &mut self.instance_name_to_arg_ref,
-                                &Switch::Short(*short),
-                                arg_ref,
-                            )?;
-                            Self::register_switch(
-                                &mut self.instance_name_to_arg_ref,
-                                &Switch::Long(long.clone()),
-                                arg_ref,
-                            )?;
-                        }
+                self.allow_frees = true;
+            } else {
+                let index = match flag_or_opt {
+                    FlagOrOpt::Flag => &mut self.flag_count,
+                    FlagOrOpt::Opt => &mut self.opt_count,
+                };
+                let arg_ref = LowLevelArgRef {
+                    index: *index,
+                    flag_or_opt,
+                };
+                for switch in switches {
+                    if self.instance_name_to_arg_ref.contains_key(switch) {
+                        return Err(SpecError::SwitchUsedMultipeTimes(switch.clone()));
                     }
-                    *index += 1;
+                    self.instance_name_to_arg_ref
+                        .insert(switch.clone(), arg_ref);
                 }
             }
             Ok(())
