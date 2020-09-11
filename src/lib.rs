@@ -1,84 +1,139 @@
-use std::marker::PhantomData;
 use std::str::FromStr;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub enum Switch {
+pub enum Name {
     Long(String),
     Short(char),
 }
 
 #[derive(Debug)]
 pub enum ParseError {
-    UnexpectedFreeArgument(String),
-    UnknownSwitch(Switch),
-    MissingArgument(Switch),
-    OptInFlagSequence(char),
-    ExpectedAtMostOne {
-        switches: Vec<Switch>,
-        found: usize,
-    },
-    FailedToParse {
-        switches: Vec<Switch>,
-        value: String,
-    },
+    UnexpectedPositionalArgument(String),
+    UnknownName(Name),
+    MissingArgument(Name),
+    UnexpectedArgument { name: Name, value: String },
 }
 
 #[derive(Debug)]
 pub enum SpecError {
-    MultipleFreeArguments,
-    SwitchUsedMultipeTimes(Switch),
+    MultiplePositionalArguments,
+    NameUsedMultipeTimes(Name),
 }
 
 pub trait Parser: Sized {
     type Item;
 
-    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, f: F);
-
-    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
-        let mut result = Ok(());
-        self.traverse(|switches, flag_or_opt| {
-            if result.is_ok() {
-                result = ll.register(switches, flag_or_opt);
-            }
-        });
-        result
-    }
+    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError>;
 
     fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError>;
 }
 
-struct Flag {
-    switches: Vec<Switch>,
-    description: Option<String>,
+// Determines how many times the opt can be passed
+trait Arity {}
+
+mod arity {
+    use super::Arity;
+
+    pub struct Required;
+    pub struct Optional;
+    pub struct Multiple;
+
+    impl Arity for Required {}
+    impl Arity for Optional {}
+    impl Arity for Multiple {}
 }
 
-struct Opt<T: FromStr> {
-    switches: Vec<Switch>,
+// Determines whether the opt takes a value as an argument
+trait HasArg {}
+
+mod has_arg {
+    use super::HasArg;
+    use std::marker::PhantomData;
+    use std::str::FromStr;
+
+    #[derive(Default)]
+    pub struct Yes<T: FromStr>(PhantomData<T>);
+    pub struct No;
+
+    impl<T: FromStr> HasArg for Yes<T> {}
+    impl HasArg for No {}
+}
+
+trait OptParser {
+    type Item;
+
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError>;
+}
+
+struct Opt<A: Arity, H: HasArg> {
+    /// An `Opt` with no names is treated as a positional argument
+    names: Vec<Name>,
     description: Option<String>,
     hint: Option<String>,
-    typ: PhantomData<T>,
+    arity: A,
+    has_arg: H,
 }
 
-impl Parser for Flag {
-    type Item = bool;
+impl<T: FromStr> OptParser for Opt<arity::Required, has_arg::Yes<T>> {
+    type Item = T;
 
-    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
-        f(&self.switches, low_level::FlagOrOpt::Flag);
-    }
-
-    fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
         todo!()
     }
 }
 
-impl<T: FromStr> Parser for Opt<T> {
+impl<T: FromStr> OptParser for Opt<arity::Optional, has_arg::Yes<T>> {
     type Item = Option<T>;
 
-    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
-        f(&self.switches, low_level::FlagOrOpt::Opt);
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        todo!()
     }
+}
 
-    fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
+impl<T: FromStr> OptParser for Opt<arity::Multiple, has_arg::Yes<T>> {
+    type Item = Vec<T>;
+
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        todo!()
+    }
+}
+
+impl OptParser for Opt<arity::Optional, has_arg::No> {
+    type Item = bool;
+
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        todo!()
+    }
+}
+
+impl OptParser for Opt<arity::Multiple, has_arg::No> {
+    type Item = usize;
+
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
         todo!()
     }
 }
@@ -91,9 +146,8 @@ struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {
 impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT, PU> {
     type Item = (T, U);
 
-    fn traverse<F: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: F) {
-        self.parser_t.traverse(&mut f);
-        self.parser_u.traverse(&mut f);
+    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        todo!()
     }
 
     fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
@@ -109,8 +163,8 @@ struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> {
     type Item = U;
 
-    fn traverse<G: FnMut(&[Switch], low_level::FlagOrOpt)>(&self, mut f: G) {
-        self.parser_t.traverse(&mut f);
+    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        todo!()
     }
 
     fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
@@ -119,40 +173,41 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
 }
 
 pub mod low_level {
-    use super::{ParseError, SpecError, Switch};
+    use super::{Name, ParseError, SpecError};
     use std::collections::HashMap;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum FlagOrOpt {
-        Flag,
-        Opt,
+    pub enum HasArg {
+        Yes,
+        No,
     }
 
     #[derive(Clone, Copy)]
     struct LowLevelArgRef {
         index: usize,
-        flag_or_opt: FlagOrOpt,
+        has_arg: HasArg,
     }
 
     #[derive(Default)]
     pub struct LowLevelParser {
-        instance_name_to_arg_ref: HashMap<Switch, LowLevelArgRef>,
+        instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flag_count: usize,
         opt_count: usize,
         allow_frees: bool,
     }
 
     pub struct LowLevelParserOutput {
-        instance_name_to_arg_ref: HashMap<Switch, LowLevelArgRef>,
+        instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flags: Vec<usize>,
         opts: Vec<Vec<String>>,
         frees: Vec<String>,
     }
 
     enum Token {
-        Switch(Switch),
+        Name(Name),
         ShortSequence(String),
         Word(String),
+        Assignment { long: String, value: String },
         Separator,
     }
 
@@ -161,11 +216,19 @@ pub mod low_level {
             if s == "--" {
                 Token::Separator
             } else if let Some(long) = s.strip_prefix("--") {
-                Token::Switch(Switch::Long(long.to_string()))
+                let assignment_split = long.splitn(2, "=").collect::<Vec<_>>();
+                if assignment_split.len() == 1 {
+                    Token::Name(Name::Long(long.to_string()))
+                } else {
+                    Token::Assignment {
+                        long: assignment_split[0].to_string(),
+                        value: assignment_split[1].to_string(),
+                    }
+                }
             } else if let Some(shorts) = s.strip_prefix("-") {
                 match shorts.len() {
                     0 => Token::Word("-".to_string()),
-                    1 => Token::Switch(Switch::Short(shorts.chars().next().unwrap())),
+                    1 => Token::Name(Name::Short(shorts.chars().next().unwrap())),
                     _ => Token::ShortSequence(shorts.to_string()),
                 }
             } else {
@@ -175,43 +238,27 @@ pub mod low_level {
     }
 
     impl LowLevelParser {
-        fn register_switch(
-            instance_name_to_arg_ref: &mut HashMap<Switch, LowLevelArgRef>,
-            switch: &Switch,
-            arg_ref: LowLevelArgRef,
-        ) -> Result<(), SpecError> {
-            if instance_name_to_arg_ref.contains_key(switch) {
-                return Err(SpecError::SwitchUsedMultipeTimes(switch.clone()));
-            }
-            instance_name_to_arg_ref.insert(switch.clone(), arg_ref);
-            Ok(())
-        }
-        pub fn register(
-            &mut self,
-            switches: &[Switch],
-            flag_or_opt: FlagOrOpt,
-        ) -> Result<(), SpecError> {
-            if switches.is_empty() {
-                assert!(flag_or_opt == FlagOrOpt::Opt);
+        pub fn register(&mut self, names: &[Name], has_arg: HasArg) -> Result<(), SpecError> {
+            if names.is_empty() {
+                assert!(has_arg == HasArg::Yes);
                 if self.allow_frees {
-                    return Err(SpecError::MultipleFreeArguments);
+                    return Err(SpecError::MultiplePositionalArguments);
                 }
                 self.allow_frees = true;
             } else {
-                let index = match flag_or_opt {
-                    FlagOrOpt::Flag => &mut self.flag_count,
-                    FlagOrOpt::Opt => &mut self.opt_count,
+                let index = match has_arg {
+                    HasArg::No => &mut self.flag_count,
+                    HasArg::Yes => &mut self.opt_count,
                 };
                 let arg_ref = LowLevelArgRef {
                     index: *index,
-                    flag_or_opt,
+                    has_arg,
                 };
-                for switch in switches {
-                    if self.instance_name_to_arg_ref.contains_key(switch) {
-                        return Err(SpecError::SwitchUsedMultipeTimes(switch.clone()));
+                for name in names {
+                    if self.instance_name_to_arg_ref.contains_key(name) {
+                        return Err(SpecError::NameUsedMultipeTimes(name.clone()));
                     }
-                    self.instance_name_to_arg_ref
-                        .insert(switch.clone(), arg_ref);
+                    self.instance_name_to_arg_ref.insert(name.clone(), arg_ref);
                 }
             }
             Ok(())
@@ -239,36 +286,53 @@ pub mod low_level {
                         if allow_frees {
                             frees.push(word);
                         } else {
-                            return Err(ParseError::UnexpectedFreeArgument(word));
+                            return Err(ParseError::UnexpectedPositionalArgument(word));
                         }
                     }
                     Token::ShortSequence(shorts) => {
                         for short in shorts.chars() {
-                            let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
-                                .get(&Switch::Short(short))
-                                .ok_or_else(|| ParseError::UnknownSwitch(Switch::Short(short)))?;
-                            match flag_or_opt {
-                                FlagOrOpt::Flag => flags[*index] += 1,
-                                FlagOrOpt::Opt => return Err(ParseError::OptInFlagSequence(short)),
+                            let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                                .get(&Name::Short(short))
+                                .ok_or_else(|| ParseError::UnknownName(Name::Short(short)))?;
+                            match has_arg {
+                                HasArg::No => flags[*index] += 1,
+                                HasArg::Yes => {
+                                    return Err(ParseError::MissingArgument(Name::Short(short)))
+                                }
                             }
                         }
                     }
-                    Token::Switch(switch) => {
-                        let LowLevelArgRef { index, flag_or_opt } = instance_name_to_arg_ref
-                            .get(&switch)
-                            .ok_or_else(|| ParseError::UnknownSwitch(switch.clone()))?;
-                        match flag_or_opt {
-                            FlagOrOpt::Flag => flags[*index] += 1,
-                            FlagOrOpt::Opt => {
+                    Token::Name(name) => {
+                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                            .get(&name)
+                            .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
+                        match has_arg {
+                            HasArg::No => flags[*index] += 1,
+                            HasArg::Yes => {
                                 match Token::parse(
-                                    args_iter.next().ok_or_else(|| {
-                                        ParseError::MissingArgument(switch.clone())
-                                    })?,
+                                    args_iter
+                                        .next()
+                                        .ok_or_else(|| ParseError::MissingArgument(name.clone()))?,
                                 ) {
                                     Token::Word(word) => opts[*index].push(word),
-                                    _ => return Err(ParseError::MissingArgument(switch)),
+                                    _ => return Err(ParseError::MissingArgument(name)),
                                 }
                             }
+                        }
+                    }
+                    Token::Assignment { long, value } => {
+                        let name = Name::Long(long);
+                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                            .get(&name)
+                            .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
+                        match has_arg {
+                            HasArg::No => {
+                                return Err(ParseError::UnexpectedArgument {
+                                    name: name.clone(),
+                                    value,
+                                })
+                            }
+                            HasArg::Yes => opts[*index].push(value),
                         }
                     }
                 }
@@ -278,7 +342,7 @@ pub mod low_level {
                     frees.push(arg);
                 }
             } else if let Some(arg) = args_iter.next() {
-                return Err(ParseError::UnexpectedFreeArgument(arg));
+                return Err(ParseError::UnexpectedPositionalArgument(arg));
             }
             Ok(LowLevelParserOutput {
                 instance_name_to_arg_ref,
@@ -290,22 +354,22 @@ pub mod low_level {
     }
 
     impl LowLevelParserOutput {
-        pub fn get_flag(&self, switch: &Switch) -> usize {
-            let LowLevelArgRef { index, flag_or_opt } =
-                self.instance_name_to_arg_ref.get(switch).unwrap();
-            assert!(*flag_or_opt == FlagOrOpt::Flag);
+        pub fn get_flag(&self, names: &[Name]) -> usize {
+            let LowLevelArgRef { index, has_arg } =
+                self.instance_name_to_arg_ref.get(&names[0]).unwrap();
+            assert!(*has_arg == HasArg::No);
             self.flags[*index]
         }
 
-        pub fn get_opt(&self, switch: &Switch) -> &[String] {
-            let LowLevelArgRef { index, flag_or_opt } =
-                self.instance_name_to_arg_ref.get(switch).unwrap();
-            assert!(*flag_or_opt == FlagOrOpt::Opt);
-            &self.opts[*index]
-        }
-
-        pub fn get_free(&self) -> &[String] {
-            &self.frees
+        pub fn get_opt(&self, names: &[Name]) -> &[String] {
+            if let Some(name) = names.first() {
+                let LowLevelArgRef { index, has_arg } =
+                    self.instance_name_to_arg_ref.get(name).unwrap();
+                assert!(*has_arg == HasArg::Yes);
+                &self.opts[*index]
+            } else {
+                &self.frees
+            }
         }
     }
 }
