@@ -1,3 +1,4 @@
+use std::env;
 use std::str::FromStr;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -10,28 +11,70 @@ pub enum Name {
 pub enum ParseError {
     UnexpectedPositionalArgument(String),
     UnknownName(Name),
-    MissingArgument(Name),
-    UnexpectedArgument { name: Name, value: String },
+    MissingArgumentValue(Name),
+    UnexpectedArgumentValue {
+        name: Name,
+        value: String,
+    },
+    MissingRequiredArgument(Vec<Name>),
+    ExpectedOneArgumentValue {
+        names: Vec<Name>,
+        values: Vec<String>,
+    },
+    UnableToParseArgumentValue {
+        names: Vec<Name>,
+        value: String,
+    },
+    ExpectedOneFlag {
+        names: Vec<Name>,
+        count: usize,
+    },
 }
 
 #[derive(Debug)]
 pub enum SpecError {
     MultiplePositionalArguments,
-    NameUsedMultipeTimes(Name),
+    NameUsedMultipleTimes(Name),
+    FlagWithNoNames,
 }
 
 pub trait Parser: Sized {
     type Item;
 
-    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError>;
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError>;
 
-    fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError>;
+    fn parse_low_level(
+        self,
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError>;
+
+    fn parse_args<A: IntoIterator<Item = String>>(self, args: A) -> Result<Self::Item, ParseError> {
+        let mut low_level_parser = low_level::LowLevelParser::default();
+        self.register_low_level(&mut low_level_parser).unwrap();
+        let low_level_output = low_level_parser.parse(args)?;
+        self.parse_low_level(&low_level_output)
+    }
+
+    fn parse_env(self) -> Result<Self::Item, ParseError> {
+        self.parse_args(env::args().skip(1))
+    }
+
+    fn both<PU: Parser>(self, other: PU) -> Both<Self::Item, PU::Item, Self, PU> {
+        Both {
+            parser_t: self,
+            parser_u: other,
+        }
+    }
+
+    fn map<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Map<Self::Item, U, F, Self> {
+        Map { f, parser_t: self }
+    }
 }
 
-// Determines how many times the opt can be passed
-trait Arity {}
+/// Determines how many times the opt can be passed
+pub trait Arity {}
 
-mod arity {
+pub mod arity {
     use super::Arity;
 
     pub struct Required;
@@ -44,101 +87,252 @@ mod arity {
 }
 
 // Determines whether the opt takes a value as an argument
-trait HasArg {}
+pub trait HasArg {
+    fn low_level() -> low_level::HasArg;
+}
 
-mod has_arg {
-    use super::HasArg;
+pub mod has_arg {
+    use super::{low_level, HasArg};
     use std::marker::PhantomData;
     use std::str::FromStr;
 
-    #[derive(Default)]
     pub struct Yes<T: FromStr>(PhantomData<T>);
     pub struct No;
 
-    impl<T: FromStr> HasArg for Yes<T> {}
-    impl HasArg for No {}
+    impl<T: FromStr> HasArg for Yes<T> {
+        fn low_level() -> low_level::HasArg {
+            low_level::HasArg::Yes
+        }
+    }
+    impl HasArg for No {
+        fn low_level() -> low_level::HasArg {
+            low_level::HasArg::No
+        }
+    }
+
+    impl<T: FromStr> Default for Yes<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
 }
 
-trait OptParser {
-    type Item;
+pub trait OptParser {
+    type OptItem;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError>;
+    ) -> Result<Self::OptItem, ParseError>;
 }
 
-struct Opt<A: Arity, H: HasArg> {
+pub struct Opt<A: Arity, H: HasArg> {
     /// An `Opt` with no names is treated as a positional argument
-    names: Vec<Name>,
-    description: Option<String>,
-    hint: Option<String>,
-    arity: A,
-    has_arg: H,
+    pub names: Vec<Name>,
+    pub description: Option<String>,
+    pub hint: Option<String>,
+    pub arity: A,
+    pub has_arg: H,
+}
+
+impl<A: Arity, H: HasArg> Opt<A, H> {
+    pub fn name(mut self, name: Name) -> Self {
+        self.names.push(name);
+        self
+    }
+    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
+        self.name(Name::Long(long.as_ref().to_string()))
+    }
+    pub fn short(self, short: char) -> Self {
+        self.name(Name::Short(short))
+    }
+    pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.description = Some(description.as_ref().to_string());
+        self
+    }
+    pub fn hint<S: AsRef<str>>(mut self, hint: S) -> Self {
+        self.hint = Some(hint.as_ref().to_string());
+        self
+    }
+    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
+        self.long(long)
+    }
+    pub fn s(self, short: char) -> Self {
+        self.short(short)
+    }
+    pub fn d<S: AsRef<str>>(self, description: S) -> Self {
+        self.description(description)
+    }
+    pub fn h<S: AsRef<str>>(self, hint: S) -> Self {
+        self.hint(hint)
+    }
+}
+
+pub mod prelude {
+    pub use super::Parser;
+    use super::*;
+
+    pub fn opt<A: Arity, H: HasArg>(arity: A, has_arg: H) -> Opt<A, H> {
+        Opt {
+            names: Vec::new(),
+            description: None,
+            hint: None,
+            arity,
+            has_arg,
+        }
+    }
+
+    pub fn opt_opt<T: FromStr>() -> Opt<arity::Optional, has_arg::Yes<T>> {
+        opt(arity::Optional, has_arg::Yes::default())
+    }
+
+    pub fn opt_req<T: FromStr>() -> Opt<arity::Required, has_arg::Yes<T>> {
+        opt(arity::Required, has_arg::Yes::default())
+    }
+
+    pub fn opt_multi<T: FromStr>() -> Opt<arity::Multiple, has_arg::Yes<T>> {
+        opt(arity::Multiple, has_arg::Yes::default())
+    }
+
+    pub fn flag_opt() -> Opt<arity::Optional, has_arg::No> {
+        opt(arity::Optional, has_arg::No)
+    }
+
+    pub fn flag_multi() -> Opt<arity::Multiple, has_arg::No> {
+        opt(arity::Multiple, has_arg::No)
+    }
 }
 
 impl<T: FromStr> OptParser for Opt<arity::Required, has_arg::Yes<T>> {
-    type Item = T;
+    type OptItem = T;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
-        todo!()
+    ) -> Result<Self::OptItem, ParseError> {
+        let values = ll.get_opt_values(names);
+        match values.len() {
+            0 => Err(ParseError::MissingRequiredArgument(names.to_vec())),
+            1 => values[0]
+                .parse()
+                .map_err(|_| ParseError::UnableToParseArgumentValue {
+                    names: names.to_vec(),
+                    value: values[0].clone(),
+                }),
+            _ => Err(ParseError::ExpectedOneArgumentValue {
+                names: names.to_vec(),
+                values: values.to_vec(),
+            }),
+        }
     }
 }
 
 impl<T: FromStr> OptParser for Opt<arity::Optional, has_arg::Yes<T>> {
-    type Item = Option<T>;
+    type OptItem = Option<T>;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
-        todo!()
+    ) -> Result<Self::OptItem, ParseError> {
+        let values = ll.get_opt_values(names);
+        match values.len() {
+            0 => Ok(None),
+            1 => Ok(Some(values[0].parse().map_err(|_| {
+                ParseError::UnableToParseArgumentValue {
+                    names: names.to_vec(),
+                    value: values[0].clone(),
+                }
+            })?)),
+            _ => Err(ParseError::ExpectedOneArgumentValue {
+                names: names.to_vec(),
+                values: values.to_vec(),
+            }),
+        }
     }
 }
 
 impl<T: FromStr> OptParser for Opt<arity::Multiple, has_arg::Yes<T>> {
-    type Item = Vec<T>;
+    type OptItem = Vec<T>;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
-        todo!()
+    ) -> Result<Self::OptItem, ParseError> {
+        let values = ll.get_opt_values(names);
+        let mut ret = Vec::with_capacity(values.len());
+        for v in values {
+            ret.push(
+                v.parse()
+                    .map_err(|_| ParseError::UnableToParseArgumentValue {
+                        names: names.to_vec(),
+                        value: v.clone(),
+                    })?,
+            );
+        }
+        Ok(ret)
     }
 }
 
 impl OptParser for Opt<arity::Optional, has_arg::No> {
-    type Item = bool;
+    type OptItem = bool;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
-        todo!()
+    ) -> Result<Self::OptItem, ParseError> {
+        match ll.get_flag_count(names) {
+            0 => Ok(false),
+            1 => Ok(true),
+            count => Err(ParseError::ExpectedOneFlag {
+                names: names.to_vec(),
+                count,
+            }),
+        }
     }
 }
 
 impl OptParser for Opt<arity::Multiple, has_arg::No> {
-    type Item = usize;
+    type OptItem = usize;
 
     fn parse_opt(
         &self,
         names: &[Name],
         ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
-        todo!()
+    ) -> Result<Self::OptItem, ParseError> {
+        Ok(ll.get_flag_count(names))
     }
 }
 
-struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {
+impl<A: Arity, H: HasArg> Parser for Opt<A, H>
+where
+    Self: OptParser,
+{
+    type Item = <Self as OptParser>::OptItem;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        let has_arg = H::low_level();
+        if let low_level::HasArg::No = has_arg {
+            if self.names.is_empty() {
+                return Err(SpecError::FlagWithNoNames);
+            }
+        }
+        ll.register(&self.names, has_arg)
+    }
+
+    fn parse_low_level(
+        self,
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        self.parse_opt(&self.names, ll)
+    }
+}
+
+pub struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {
     parser_t: PT,
     parser_u: PU,
 }
@@ -146,16 +340,23 @@ struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {
 impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT, PU> {
     type Item = (T, U);
 
-    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
-        todo!()
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser_t.register_low_level(ll)?;
+        self.parser_u.register_low_level(ll)
     }
 
-    fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
-        Ok((self.parser_t.parse(ll)?, self.parser_u.parse(ll)?))
+    fn parse_low_level(
+        self,
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        Ok((
+            self.parser_t.parse_low_level(ll)?,
+            self.parser_u.parse_low_level(ll)?,
+        ))
     }
 }
 
-struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
+pub struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
     f: F,
     parser_t: PT,
 }
@@ -163,12 +364,15 @@ struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> {
     type Item = U;
 
-    fn register(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
-        todo!()
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser_t.register_low_level(ll)
     }
 
-    fn parse(self, ll: &low_level::LowLevelParserOutput) -> Result<Self::Item, ParseError> {
-        Ok((self.f)(self.parser_t.parse(ll)?))
+    fn parse_low_level(
+        self,
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, ParseError> {
+        Ok((self.f)(self.parser_t.parse_low_level(ll)?))
     }
 }
 
@@ -256,10 +460,11 @@ pub mod low_level {
                 };
                 for name in names {
                     if self.instance_name_to_arg_ref.contains_key(name) {
-                        return Err(SpecError::NameUsedMultipeTimes(name.clone()));
+                        return Err(SpecError::NameUsedMultipleTimes(name.clone()));
                     }
                     self.instance_name_to_arg_ref.insert(name.clone(), arg_ref);
                 }
+                *index += 1;
             }
             Ok(())
         }
@@ -297,7 +502,9 @@ pub mod low_level {
                             match has_arg {
                                 HasArg::No => flags[*index] += 1,
                                 HasArg::Yes => {
-                                    return Err(ParseError::MissingArgument(Name::Short(short)))
+                                    return Err(ParseError::MissingArgumentValue(Name::Short(
+                                        short,
+                                    )))
                                 }
                             }
                         }
@@ -309,13 +516,11 @@ pub mod low_level {
                         match has_arg {
                             HasArg::No => flags[*index] += 1,
                             HasArg::Yes => {
-                                match Token::parse(
-                                    args_iter
-                                        .next()
-                                        .ok_or_else(|| ParseError::MissingArgument(name.clone()))?,
-                                ) {
+                                match Token::parse(args_iter.next().ok_or_else(|| {
+                                    ParseError::MissingArgumentValue(name.clone())
+                                })?) {
                                     Token::Word(word) => opts[*index].push(word),
-                                    _ => return Err(ParseError::MissingArgument(name)),
+                                    _ => return Err(ParseError::MissingArgumentValue(name)),
                                 }
                             }
                         }
@@ -327,7 +532,7 @@ pub mod low_level {
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
                         match has_arg {
                             HasArg::No => {
-                                return Err(ParseError::UnexpectedArgument {
+                                return Err(ParseError::UnexpectedArgumentValue {
                                     name: name.clone(),
                                     value,
                                 })
@@ -354,14 +559,14 @@ pub mod low_level {
     }
 
     impl LowLevelParserOutput {
-        pub fn get_flag(&self, names: &[Name]) -> usize {
+        pub fn get_flag_count(&self, names: &[Name]) -> usize {
             let LowLevelArgRef { index, has_arg } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
             assert!(*has_arg == HasArg::No);
             self.flags[*index]
         }
 
-        pub fn get_opt(&self, names: &[Name]) -> &[String] {
+        pub fn get_opt_values(&self, names: &[Name]) -> &[String] {
             if let Some(name) = names.first() {
                 let LowLevelArgRef { index, has_arg } =
                     self.instance_name_to_arg_ref.get(name).unwrap();
