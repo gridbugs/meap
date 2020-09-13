@@ -117,26 +117,26 @@ pub mod arity {
 }
 
 /// Determines whether the opt takes a value as an argument
-pub trait HasArg {
-    fn low_level() -> low_level::HasArg;
+pub trait HaParam {
+    fn low_level() -> low_level::HaParam;
 }
 
-pub mod has_arg {
-    use super::{low_level, HasArg};
+pub mod has_param {
+    use super::{low_level, HaParam};
     use std::marker::PhantomData;
     use std::str::FromStr;
 
     pub struct YesVia<V: FromStr, T: From<V>>(PhantomData<(V, T)>);
     pub struct No;
 
-    impl<V: FromStr, T: From<V>> HasArg for YesVia<V, T> {
-        fn low_level() -> low_level::HasArg {
-            low_level::HasArg::Yes
+    impl<V: FromStr, T: From<V>> HaParam for YesVia<V, T> {
+        fn low_level() -> low_level::HaParam {
+            low_level::HaParam::Yes
         }
     }
-    impl HasArg for No {
-        fn low_level() -> low_level::HasArg {
-            low_level::HasArg::No
+    impl HaParam for No {
+        fn low_level() -> low_level::HaParam {
+            low_level::HaParam::No
         }
     }
 
@@ -202,15 +202,15 @@ pub mod name_type {
     }
 }
 
-pub struct Arg<A: Arity, H: HasArg, N: NameType> {
+pub struct Arg<A: Arity, H: HaParam, N: NameType> {
     pub description: Option<String>,
     pub hint: Option<String>,
     pub name_type: N,
     pub arity: A,
-    pub has_arg: H,
+    pub has_param: H,
 }
 
-impl<A: Arity, H: HasArg, N: NameType> Arg<A, H, N> {
+impl<A: Arity, H: HaParam, N: NameType> Arg<A, H, N> {
     pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = Some(description.as_ref().to_string());
         self
@@ -227,7 +227,7 @@ impl<A: Arity, H: HasArg, N: NameType> Arg<A, H, N> {
     }
 }
 
-impl<A: Arity, H: HasArg> Arg<A, H, name_type::Named> {
+impl<A: Arity, H: HaParam> Arg<A, H, name_type::Named> {
     pub fn name<N: IntoName>(mut self, name: N) -> Self {
         self.name_type.add(name.into_name());
         self
@@ -260,7 +260,7 @@ pub trait SingleArgParser<N: NameType> {
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
-    for Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Positional>
+    for Arg<arity::Required, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = T;
 
@@ -283,7 +283,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
-    for Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Positional>
+    for Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = Option<T>;
 
@@ -306,7 +306,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
-    for Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Positional>
+    for Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = Vec<T>;
 
@@ -329,7 +329,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
-    for Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Named>
+    for Arg<arity::Required, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = T;
 
@@ -358,7 +358,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
-    for Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Named>
+    for Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = Option<T>;
 
@@ -385,7 +385,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
-    for Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Named>
+    for Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = Vec<T>;
 
@@ -408,7 +408,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
     }
 }
 
-impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_arg::No, name_type::Named> {
+impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_param::No, name_type::Named> {
     type SingleArgItem = bool;
 
     fn parse_single_arg(
@@ -427,7 +427,7 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_arg::No, nam
     }
 }
 
-impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_arg::No, name_type::Named> {
+impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_param::No, name_type::Named> {
     type SingleArgItem = usize;
 
     fn parse_single_arg(
@@ -439,7 +439,7 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_arg::No, nam
     }
 }
 
-impl<A: Arity, H: HasArg, N: NameType> Parser for Arg<A, H, N>
+impl<A: Arity, H: HaParam, N: NameType> Parser for Arg<A, H, N>
 where
     Self: SingleArgParser<N>,
 {
@@ -561,9 +561,9 @@ pub mod prelude {
     pub use super::Parser;
     use super::*;
 
-    pub fn arg<A: Arity, H: HasArg, N: NameType>(
+    pub fn arg<A: Arity, H: HaParam, N: NameType>(
         arity: A,
-        has_arg: H,
+        has_param: H,
         name_type: N,
     ) -> Arg<A, H, N> {
         Arg {
@@ -571,136 +571,136 @@ pub mod prelude {
             hint: None,
             name_type,
             arity,
-            has_arg,
+            has_param,
         }
     }
 
     pub fn pos_opt<T: FromStr>(
         name: &str,
-    ) -> Arg<arity::Optional, has_arg::YesVia<T, T>, name_type::Positional> {
+    ) -> Arg<arity::Optional, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Optional,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn pos_req<T: FromStr>(
         name: &str,
-    ) -> Arg<arity::Required, has_arg::YesVia<T, T>, name_type::Positional> {
+    ) -> Arg<arity::Required, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Required,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn pos_multi<T: FromStr>(
         name: &str,
-    ) -> Arg<arity::Multiple, has_arg::YesVia<T, T>, name_type::Positional> {
+    ) -> Arg<arity::Multiple, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Multiple,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn pos_opt_via<V: FromStr, T: From<V>>(
         name: &str,
-    ) -> Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Positional> {
+    ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Optional,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn pos_req_via<V: FromStr, T: From<V>>(
         name: &str,
-    ) -> Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Positional> {
+    ) -> Arg<arity::Required, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Required,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn pos_multi_via<V: FromStr, T: From<V>>(
         name: &str,
-    ) -> Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Positional> {
+    ) -> Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Multiple,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Positional::new(name),
         )
     }
 
     pub fn opt_opt<T: FromStr, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Optional, has_arg::YesVia<T, T>, name_type::Named> {
+    ) -> Arg<arity::Optional, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Optional,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_req<T: FromStr, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Required, has_arg::YesVia<T, T>, name_type::Named> {
+    ) -> Arg<arity::Required, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Required,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_multi<T: FromStr, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Multiple, has_arg::YesVia<T, T>, name_type::Named> {
+    ) -> Arg<arity::Multiple, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Multiple,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_opt_via<V: FromStr, T: From<V>, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Named> {
+    ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Optional,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_req_via<V: FromStr, T: From<V>, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Named> {
+    ) -> Arg<arity::Required, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Required,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_multi_via<V: FromStr, T: From<V>, N: IntoName>(
         name: N,
-    ) -> Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Named> {
+    ) -> Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Multiple,
-            has_arg::YesVia::default(),
+            has_param::YesVia::default(),
             name_type::Named::new(name),
         )
     }
 
-    pub fn flag<N: IntoName>(name: N) -> Arg<arity::Optional, has_arg::No, name_type::Named> {
-        arg(arity::Optional, has_arg::No, name_type::Named::new(name))
+    pub fn flag<N: IntoName>(name: N) -> Arg<arity::Optional, has_param::No, name_type::Named> {
+        arg(arity::Optional, has_param::No, name_type::Named::new(name))
     }
 
-    pub fn flag_count<N: IntoName>(name: N) -> Arg<arity::Multiple, has_arg::No, name_type::Named> {
-        arg(arity::Multiple, has_arg::No, name_type::Named::new(name))
+    pub fn flag_count<N: IntoName>(name: N) -> Arg<arity::Multiple, has_param::No, name_type::Named> {
+        arg(arity::Multiple, has_param::No, name_type::Named::new(name))
     }
 }
 
@@ -710,7 +710,7 @@ pub mod low_level {
     use std::vec;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum HasArg {
+    pub enum HaParam {
         Yes,
         No,
     }
@@ -718,7 +718,7 @@ pub mod low_level {
     #[derive(Clone, Copy)]
     struct LowLevelArgRef {
         index: usize,
-        has_arg: HasArg,
+        has_param: HaParam,
     }
 
     #[derive(Default)]
@@ -776,14 +776,14 @@ pub mod low_level {
     }
 
     impl LowLevelParser {
-        pub fn register(&mut self, names: &[Name], has_arg: HasArg) -> Result<(), SpecError> {
-            let index = match has_arg {
-                HasArg::No => &mut self.flag_count,
-                HasArg::Yes => &mut self.opt_count,
+        pub fn register(&mut self, names: &[Name], has_param: HaParam) -> Result<(), SpecError> {
+            let index = match has_param {
+                HaParam::No => &mut self.flag_count,
+                HaParam::Yes => &mut self.opt_count,
             };
             let arg_ref = LowLevelArgRef {
                 index: *index,
-                has_arg,
+                has_param,
             };
             for name in names {
                 if self.instance_name_to_arg_ref.contains_key(name) {
@@ -814,22 +814,22 @@ pub mod low_level {
                     Token::Separator => break,
                     Token::Word(word) => frees.push(word),
                     Token::ShortSequence { first, rest } => {
-                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                        let LowLevelArgRef { index, has_param } = instance_name_to_arg_ref
                             .get(&Name::Short(first))
                             .ok_or_else(|| ParseError::UnknownName(Name::Short(first)))?;
-                        match has_arg {
-                            HasArg::No => {
+                        match has_param {
+                            HaParam::No => {
                                 flags[*index] += 1;
                                 for short in rest.chars() {
-                                    let LowLevelArgRef { index, has_arg } =
+                                    let LowLevelArgRef { index, has_param } =
                                         instance_name_to_arg_ref
                                             .get(&Name::Short(short))
                                             .ok_or_else(|| {
                                                 ParseError::UnknownName(Name::Short(short))
                                             })?;
-                                    match has_arg {
-                                        HasArg::No => flags[*index] += 1,
-                                        HasArg::Yes => {
+                                    match has_param {
+                                        HaParam::No => flags[*index] += 1,
+                                        HaParam::Yes => {
                                             return Err(ParseError::MissingArgumentValue(
                                                 Name::Short(short),
                                             ))
@@ -837,18 +837,18 @@ pub mod low_level {
                                     }
                                 }
                             }
-                            HasArg::Yes => {
+                            HaParam::Yes => {
                                 opts[*index].push(rest);
                             }
                         }
                     }
                     Token::Name(name) => {
-                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                        let LowLevelArgRef { index, has_param } = instance_name_to_arg_ref
                             .get(&name)
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
-                        match has_arg {
-                            HasArg::No => flags[*index] += 1,
-                            HasArg::Yes => {
+                        match has_param {
+                            HaParam::No => flags[*index] += 1,
+                            HaParam::Yes => {
                                 match Token::parse(args_iter.next().ok_or_else(|| {
                                     ParseError::MissingArgumentValue(name.clone())
                                 })?) {
@@ -860,17 +860,17 @@ pub mod low_level {
                     }
                     Token::LongAssignment { long, value } => {
                         let name = Name::Long(long);
-                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                        let LowLevelArgRef { index, has_param } = instance_name_to_arg_ref
                             .get(&name)
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
-                        match has_arg {
-                            HasArg::No => {
+                        match has_param {
+                            HaParam::No => {
                                 return Err(ParseError::UnexpectedArgumentValue {
                                     name: name.clone(),
                                     value,
                                 })
                             }
-                            HasArg::Yes => opts[*index].push(value),
+                            HaParam::Yes => opts[*index].push(value),
                         }
                     }
                 }
@@ -889,16 +889,16 @@ pub mod low_level {
 
     impl LowLevelParserOutput {
         pub fn get_flag_count(&self, names: &[Name]) -> usize {
-            let LowLevelArgRef { index, has_arg } =
+            let LowLevelArgRef { index, has_param } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
-            assert!(*has_arg == HasArg::No);
+            assert!(*has_param == HaParam::No);
             self.flags[*index]
         }
 
         pub fn get_opt_values(&self, names: &[Name]) -> &[String] {
-            let LowLevelArgRef { index, has_arg } =
+            let LowLevelArgRef { index, has_param } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
-            assert!(*has_arg == HasArg::Yes);
+            assert!(*has_param == HaParam::Yes);
             &self.opts[*index]
         }
 
