@@ -7,35 +7,58 @@ pub enum Name {
     Short(char),
 }
 
+impl Name {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Long(long) => long.clone(),
+            Self::Short(short) => format!("{}", short),
+        }
+    }
+}
+
+pub trait IntoName {
+    fn into_name(self) -> Name;
+}
+
+impl IntoName for Name {
+    fn into_name(self) -> Name {
+        self
+    }
+}
+
+impl IntoName for char {
+    fn into_name(self) -> Name {
+        Name::Short(self)
+    }
+}
+
+impl<'a> IntoName for &'a str {
+    fn into_name(self) -> Name {
+        Name::Long(self.to_string())
+    }
+}
+
+impl IntoName for String {
+    fn into_name(self) -> Name {
+        Name::Long(self)
+    }
+}
+
 #[derive(Debug)]
 pub enum ParseError {
-    UnexpectedPositionalArgument(String),
+    UnhandledPositionalArguments(Vec<String>),
     UnknownName(Name),
     MissingArgumentValue(Name),
-    UnexpectedArgumentValue {
-        name: Name,
-        value: String,
-    },
-    MissingRequiredArgument(Vec<Name>),
-    ExpectedOneArgumentValue {
-        names: Vec<Name>,
-        values: Vec<String>,
-    },
-    UnableToParseArgumentValue {
-        names: Vec<Name>,
-        value: String,
-    },
-    ExpectedOneFlag {
-        names: Vec<Name>,
-        count: usize,
-    },
+    UnexpectedArgumentValue { name: Name, value: String },
+    MissingRequiredArgument(String),
+    ExpectedOneArgumentValue { name: String, values: Vec<String> },
+    UnableToParseArgumentValue { name: String, value: String },
+    ExpectedOneFlag { name: String, count: usize },
 }
 
 #[derive(Debug)]
 pub enum SpecError {
-    MultiplePositionalArguments,
     NameUsedMultipleTimes(Name),
-    FlagWithNoNames,
 }
 
 pub trait Parser: Sized {
@@ -45,14 +68,21 @@ pub trait Parser: Sized {
 
     fn parse_low_level(
         self,
-        ll: &low_level::LowLevelParserOutput,
+        ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, ParseError>;
 
     fn parse_args<A: IntoIterator<Item = String>>(self, args: A) -> Result<Self::Item, ParseError> {
         let mut low_level_parser = low_level::LowLevelParser::default();
         self.register_low_level(&mut low_level_parser).unwrap();
-        let low_level_output = low_level_parser.parse(args)?;
-        self.parse_low_level(&low_level_output)
+        let mut low_level_output = low_level_parser.parse(args)?;
+        let item = self.parse_low_level(&mut low_level_output)?;
+        let unhandled_positional_arguments = low_level_output.free_iter().collect::<Vec<_>>();
+        if !unhandled_positional_arguments.is_empty() {
+            return Err(ParseError::UnhandledPositionalArguments(
+                unhandled_positional_arguments,
+            ));
+        }
+        Ok(item)
     }
 
     fn parse_env(self) -> Result<Self::Item, ParseError> {
@@ -86,7 +116,7 @@ pub mod arity {
     impl Arity for Multiple {}
 }
 
-// Determines whether the opt takes a value as an argument
+/// Determines whether the opt takes a value as an argument
 pub trait HasArg {
     fn low_level() -> low_level::HasArg;
 }
@@ -117,36 +147,70 @@ pub mod has_arg {
     }
 }
 
-pub trait OptParser {
-    type OptItem;
-
-    fn parse_opt(
-        &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError>;
+pub trait NameType {
+    fn name_for_error(&self) -> String;
+    fn names_to_register(&self) -> Option<&[Name]>;
 }
 
-pub struct Opt<A: Arity, H: HasArg> {
-    /// An `Opt` with no names is treated as a positional argument
-    pub names: Vec<Name>,
+pub mod name_type {
+    use super::{IntoName, Name, NameType};
+
+    pub struct Named {
+        names: Vec<Name>,
+    }
+    pub struct Positional {
+        name: String,
+    }
+
+    impl NameType for Named {
+        fn name_for_error(&self) -> String {
+            self.names[0].to_string()
+        }
+        fn names_to_register(&self) -> Option<&[Name]> {
+            Some(&self.names)
+        }
+    }
+    impl NameType for Positional {
+        fn name_for_error(&self) -> String {
+            self.name.clone()
+        }
+        fn names_to_register(&self) -> Option<&[Name]> {
+            None
+        }
+    }
+
+    impl Named {
+        pub fn new<N: IntoName>(name: N) -> Self {
+            Self {
+                names: vec![name.into_name()],
+            }
+        }
+        pub fn add<N: IntoName>(&mut self, name: N) {
+            self.names.push(name.into_name());
+        }
+        pub fn names(&self) -> &[Name] {
+            &self.names
+        }
+    }
+
+    impl Positional {
+        pub fn new<N: AsRef<str>>(name: N) -> Self {
+            Self {
+                name: name.as_ref().to_string(),
+            }
+        }
+    }
+}
+
+pub struct Arg<A: Arity, H: HasArg, N: NameType> {
     pub description: Option<String>,
     pub hint: Option<String>,
+    pub name_type: N,
     pub arity: A,
     pub has_arg: H,
 }
 
-impl<A: Arity, H: HasArg> Opt<A, H> {
-    pub fn name(mut self, name: Name) -> Self {
-        self.names.push(name);
-        self
-    }
-    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
-        self.name(Name::Long(long.as_ref().to_string()))
-    }
-    pub fn short(self, short: char) -> Self {
-        self.name(Name::Short(short))
-    }
+impl<A: Arity, H: HasArg, N: NameType> Arg<A, H, N> {
     pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = Some(description.as_ref().to_string());
         self
@@ -154,12 +218,6 @@ impl<A: Arity, H: HasArg> Opt<A, H> {
     pub fn hint<S: AsRef<str>>(mut self, hint: S) -> Self {
         self.hint = Some(hint.as_ref().to_string());
         self
-    }
-    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
-        self.long(long)
-    }
-    pub fn s(self, short: char) -> Self {
-        self.short(short)
     }
     pub fn d<S: AsRef<str>>(self, description: S) -> Self {
         self.description(description)
@@ -169,117 +227,179 @@ impl<A: Arity, H: HasArg> Opt<A, H> {
     }
 }
 
-pub mod prelude {
-    pub use super::Parser;
-    use super::*;
-
-    pub fn opt<A: Arity, H: HasArg>(arity: A, has_arg: H) -> Opt<A, H> {
-        Opt {
-            names: Vec::new(),
-            description: None,
-            hint: None,
-            arity,
-            has_arg,
-        }
+impl<A: Arity, H: HasArg> Arg<A, H, name_type::Named> {
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.name_type.add(name.into_name());
+        self
     }
-
-    pub fn opt_opt<T: FromStr>() -> Opt<arity::Optional, has_arg::YesVia<T, T>> {
-        opt(arity::Optional, has_arg::YesVia::default())
+    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
+        self.name(long.as_ref())
     }
-
-    pub fn opt_req<T: FromStr>() -> Opt<arity::Required, has_arg::YesVia<T, T>> {
-        opt(arity::Required, has_arg::YesVia::default())
+    pub fn short(self, short: char) -> Self {
+        self.name(short)
     }
-
-    pub fn opt_multi<T: FromStr>() -> Opt<arity::Multiple, has_arg::YesVia<T, T>> {
-        opt(arity::Multiple, has_arg::YesVia::default())
+    pub fn n<N: IntoName>(self, name: N) -> Self {
+        self.name(name)
     }
-
-    pub fn opt_opt_via<V: FromStr, T: From<V>>() -> Opt<arity::Optional, has_arg::YesVia<V, T>> {
-        opt(arity::Optional, has_arg::YesVia::default())
+    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
+        self.long(long)
     }
-
-    pub fn opt_req_via<V: FromStr, T: From<V>>() -> Opt<arity::Required, has_arg::YesVia<V, T>> {
-        opt(arity::Required, has_arg::YesVia::default())
-    }
-
-    pub fn opt_multi_via<V: FromStr, T: From<V>>() -> Opt<arity::Multiple, has_arg::YesVia<V, T>> {
-        opt(arity::Multiple, has_arg::YesVia::default())
-    }
-
-    pub fn flag() -> Opt<arity::Optional, has_arg::No> {
-        opt(arity::Optional, has_arg::No)
-    }
-
-    pub fn flag_count() -> Opt<arity::Multiple, has_arg::No> {
-        opt(arity::Multiple, has_arg::No)
+    pub fn s(self, short: char) -> Self {
+        self.short(short)
     }
 }
 
-impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Required, has_arg::YesVia<V, T>> {
-    type OptItem = T;
+pub trait SingleArgParser<N: NameType> {
+    type SingleArgItem;
 
-    fn parse_opt(
+    fn parse_single_arg(
         &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        let values = ll.get_opt_values(names);
+        name_type: &N,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError>;
+}
+
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+    for Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Positional>
+{
+    type SingleArgItem = T;
+
+    fn parse_single_arg(
+        &self,
+        name_type: &name_type::Positional,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        let value = ll
+            .free_iter()
+            .next()
+            .ok_or_else(|| ParseError::MissingRequiredArgument(name_type.name_for_error()))?;
+        Ok(T::from(value.parse().map_err(|_| {
+            ParseError::UnableToParseArgumentValue {
+                name: name_type.name_for_error(),
+                value,
+            }
+        })?))
+    }
+}
+
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+    for Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Positional>
+{
+    type SingleArgItem = Option<T>;
+
+    fn parse_single_arg(
+        &self,
+        name_type: &name_type::Positional,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        if let Some(value) = ll.free_iter().next() {
+            Ok(Some(T::from(value.parse().map_err(|_| {
+                ParseError::UnableToParseArgumentValue {
+                    name: name_type.name_for_error(),
+                    value,
+                }
+            })?)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+    for Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Positional>
+{
+    type SingleArgItem = Vec<T>;
+
+    fn parse_single_arg(
+        &self,
+        name_type: &name_type::Positional,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        let mut ret = Vec::new();
+        for value in ll.free_iter() {
+            ret.push(T::from(value.parse().map_err(|_| {
+                ParseError::UnableToParseArgumentValue {
+                    name: name_type.name_for_error(),
+                    value,
+                }
+            })?));
+        }
+        Ok(ret)
+    }
+}
+
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+    for Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Named>
+{
+    type SingleArgItem = T;
+
+    fn parse_single_arg(
+        &self,
+        name_type: &name_type::Named,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        let values = ll.get_opt_values(name_type.names());
         match values.len() {
-            0 => Err(ParseError::MissingRequiredArgument(names.to_vec())),
+            0 => Err(ParseError::MissingRequiredArgument(
+                name_type.name_for_error(),
+            )),
             1 => Ok(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
-                    names: names.to_vec(),
+                    name: name_type.name_for_error(),
                     value: values[0].clone(),
                 }
             })?)),
             _ => Err(ParseError::ExpectedOneArgumentValue {
-                names: names.to_vec(),
+                name: name_type.name_for_error(),
                 values: values.to_vec(),
             }),
         }
     }
 }
 
-impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Optional, has_arg::YesVia<V, T>> {
-    type OptItem = Option<T>;
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+    for Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Named>
+{
+    type SingleArgItem = Option<T>;
 
-    fn parse_opt(
+    fn parse_single_arg(
         &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        let values = ll.get_opt_values(names);
+        name_type: &name_type::Named,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        let values = ll.get_opt_values(name_type.names());
         match values.len() {
             0 => Ok(None),
             1 => Ok(Some(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
-                    names: names.to_vec(),
+                    name: name_type.name_for_error(),
                     value: values[0].clone(),
                 }
             })?))),
             _ => Err(ParseError::ExpectedOneArgumentValue {
-                names: names.to_vec(),
+                name: name_type.name_for_error(),
                 values: values.to_vec(),
             }),
         }
     }
 }
 
-impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Multiple, has_arg::YesVia<V, T>> {
-    type OptItem = Vec<T>;
+impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+    for Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Named>
+{
+    type SingleArgItem = Vec<T>;
 
-    fn parse_opt(
+    fn parse_single_arg(
         &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        let values = ll.get_opt_values(names);
+        name_type: &name_type::Named,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        let values = ll.get_opt_values(name_type.names());
         let mut ret = Vec::with_capacity(values.len());
         for v in values {
             ret.push(T::from(v.parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
-                    names: names.to_vec(),
+                    name: name_type.name_for_error(),
                     value: v.clone(),
                 }
             })?));
@@ -288,58 +408,55 @@ impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Multiple, has_arg::YesVia<
     }
 }
 
-impl OptParser for Opt<arity::Optional, has_arg::No> {
-    type OptItem = bool;
+impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_arg::No, name_type::Named> {
+    type SingleArgItem = bool;
 
-    fn parse_opt(
+    fn parse_single_arg(
         &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        match ll.get_flag_count(names) {
+        name_type: &name_type::Named,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        match ll.get_flag_count(name_type.names()) {
             0 => Ok(false),
             1 => Ok(true),
             count => Err(ParseError::ExpectedOneFlag {
-                names: names.to_vec(),
+                name: name_type.name_for_error(),
                 count,
             }),
         }
     }
 }
 
-impl OptParser for Opt<arity::Multiple, has_arg::No> {
-    type OptItem = usize;
+impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_arg::No, name_type::Named> {
+    type SingleArgItem = usize;
 
-    fn parse_opt(
+    fn parse_single_arg(
         &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        Ok(ll.get_flag_count(names))
+        name_type: &name_type::Named,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::SingleArgItem, ParseError> {
+        Ok(ll.get_flag_count(name_type.names()))
     }
 }
 
-impl<A: Arity, H: HasArg> Parser for Opt<A, H>
+impl<A: Arity, H: HasArg, N: NameType> Parser for Arg<A, H, N>
 where
-    Self: OptParser,
+    Self: SingleArgParser<N>,
 {
-    type Item = <Self as OptParser>::OptItem;
+    type Item = <Self as SingleArgParser<N>>::SingleArgItem;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
-        let has_arg = H::low_level();
-        if let low_level::HasArg::No = has_arg {
-            if self.names.is_empty() {
-                return Err(SpecError::FlagWithNoNames);
-            }
+        if let Some(names) = self.name_type.names_to_register() {
+            ll.register(names, H::low_level())?;
         }
-        ll.register(&self.names, has_arg)
+        Ok(())
     }
 
     fn parse_low_level(
         self,
-        ll: &low_level::LowLevelParserOutput,
+        ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, ParseError> {
-        self.parse_opt(&self.names, ll)
+        self.parse_single_arg(&self.name_type, ll)
     }
 }
 
@@ -358,7 +475,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
 
     fn parse_low_level(
         self,
-        ll: &low_level::LowLevelParserOutput,
+        ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, ParseError> {
         Ok((
             self.parser_t.parse_low_level(ll)?,
@@ -387,7 +504,7 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
 
     fn parse_low_level(
         self,
-        ll: &low_level::LowLevelParserOutput,
+        ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, ParseError> {
         Ok((self.f)(self.parser_t.parse_low_level(ll)?))
     }
@@ -440,9 +557,157 @@ macro_rules! args_map {
     };
 }
 
+pub mod prelude {
+    pub use super::Parser;
+    use super::*;
+
+    pub fn arg<A: Arity, H: HasArg, N: NameType>(
+        arity: A,
+        has_arg: H,
+        name_type: N,
+    ) -> Arg<A, H, N> {
+        Arg {
+            description: None,
+            hint: None,
+            name_type,
+            arity,
+            has_arg,
+        }
+    }
+
+    pub fn pos_opt<T: FromStr>(
+        name: &str,
+    ) -> Arg<arity::Optional, has_arg::YesVia<T, T>, name_type::Positional> {
+        arg(
+            arity::Optional,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn pos_req<T: FromStr>(
+        name: &str,
+    ) -> Arg<arity::Required, has_arg::YesVia<T, T>, name_type::Positional> {
+        arg(
+            arity::Required,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn pos_multi<T: FromStr>(
+        name: &str,
+    ) -> Arg<arity::Multiple, has_arg::YesVia<T, T>, name_type::Positional> {
+        arg(
+            arity::Multiple,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn pos_opt_via<V: FromStr, T: From<V>>(
+        name: &str,
+    ) -> Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Positional> {
+        arg(
+            arity::Optional,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn pos_req_via<V: FromStr, T: From<V>>(
+        name: &str,
+    ) -> Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Positional> {
+        arg(
+            arity::Required,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn pos_multi_via<V: FromStr, T: From<V>>(
+        name: &str,
+    ) -> Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Positional> {
+        arg(
+            arity::Multiple,
+            has_arg::YesVia::default(),
+            name_type::Positional::new(name),
+        )
+    }
+
+    pub fn opt_opt<T: FromStr, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Optional, has_arg::YesVia<T, T>, name_type::Named> {
+        arg(
+            arity::Optional,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn opt_req<T: FromStr, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Required, has_arg::YesVia<T, T>, name_type::Named> {
+        arg(
+            arity::Required,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn opt_multi<T: FromStr, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Multiple, has_arg::YesVia<T, T>, name_type::Named> {
+        arg(
+            arity::Multiple,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn opt_opt_via<V: FromStr, T: From<V>, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Optional, has_arg::YesVia<V, T>, name_type::Named> {
+        arg(
+            arity::Optional,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn opt_req_via<V: FromStr, T: From<V>, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Required, has_arg::YesVia<V, T>, name_type::Named> {
+        arg(
+            arity::Required,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn opt_multi_via<V: FromStr, T: From<V>, N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Multiple, has_arg::YesVia<V, T>, name_type::Named> {
+        arg(
+            arity::Multiple,
+            has_arg::YesVia::default(),
+            name_type::Named::new(name),
+        )
+    }
+
+    pub fn flag<N: IntoName>(name: N) -> Arg<arity::Optional, has_arg::No, name_type::Named> {
+        arg(arity::Optional, has_arg::No, name_type::Named::new(name))
+    }
+
+    pub fn flag_count<N: IntoName>(name: N) -> Arg<arity::Multiple, has_arg::No, name_type::Named> {
+        arg(arity::Multiple, has_arg::No, name_type::Named::new(name))
+    }
+}
+
 pub mod low_level {
     use super::{Name, ParseError, SpecError};
     use std::collections::HashMap;
+    use std::vec;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub enum HasArg {
@@ -461,14 +726,13 @@ pub mod low_level {
         instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flag_count: usize,
         opt_count: usize,
-        allow_frees: bool,
     }
 
     pub struct LowLevelParserOutput {
         instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flags: Vec<usize>,
         opts: Vec<Vec<String>>,
-        frees: Vec<String>,
+        frees: vec::IntoIter<String>,
     }
 
     enum Token {
@@ -513,29 +777,21 @@ pub mod low_level {
 
     impl LowLevelParser {
         pub fn register(&mut self, names: &[Name], has_arg: HasArg) -> Result<(), SpecError> {
-            if names.is_empty() {
-                assert!(has_arg == HasArg::Yes);
-                if self.allow_frees {
-                    return Err(SpecError::MultiplePositionalArguments);
+            let index = match has_arg {
+                HasArg::No => &mut self.flag_count,
+                HasArg::Yes => &mut self.opt_count,
+            };
+            let arg_ref = LowLevelArgRef {
+                index: *index,
+                has_arg,
+            };
+            for name in names {
+                if self.instance_name_to_arg_ref.contains_key(name) {
+                    return Err(SpecError::NameUsedMultipleTimes(name.clone()));
                 }
-                self.allow_frees = true;
-            } else {
-                let index = match has_arg {
-                    HasArg::No => &mut self.flag_count,
-                    HasArg::Yes => &mut self.opt_count,
-                };
-                let arg_ref = LowLevelArgRef {
-                    index: *index,
-                    has_arg,
-                };
-                for name in names {
-                    if self.instance_name_to_arg_ref.contains_key(name) {
-                        return Err(SpecError::NameUsedMultipleTimes(name.clone()));
-                    }
-                    self.instance_name_to_arg_ref.insert(name.clone(), arg_ref);
-                }
-                *index += 1;
+                self.instance_name_to_arg_ref.insert(name.clone(), arg_ref);
             }
+            *index += 1;
             Ok(())
         }
 
@@ -547,7 +803,6 @@ pub mod low_level {
                 instance_name_to_arg_ref,
                 flag_count,
                 opt_count,
-                allow_frees,
             } = self;
             let mut flags = vec![0; flag_count];
             let mut opts = Vec::with_capacity(opt_count);
@@ -557,13 +812,7 @@ pub mod low_level {
             while let Some(token) = args_iter.next().map(Token::parse) {
                 match token {
                     Token::Separator => break,
-                    Token::Word(word) => {
-                        if allow_frees {
-                            frees.push(word);
-                        } else {
-                            return Err(ParseError::UnexpectedPositionalArgument(word));
-                        }
-                    }
+                    Token::Word(word) => frees.push(word),
                     Token::ShortSequence { first, rest } => {
                         let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
                             .get(&Name::Short(first))
@@ -626,18 +875,14 @@ pub mod low_level {
                     }
                 }
             }
-            if allow_frees {
-                for arg in args_iter {
-                    frees.push(arg);
-                }
-            } else if let Some(arg) = args_iter.next() {
-                return Err(ParseError::UnexpectedPositionalArgument(arg));
+            for arg in args_iter {
+                frees.push(arg);
             }
             Ok(LowLevelParserOutput {
                 instance_name_to_arg_ref,
                 flags,
                 opts,
-                frees,
+                frees: frees.into_iter(),
             })
         }
     }
@@ -651,14 +896,14 @@ pub mod low_level {
         }
 
         pub fn get_opt_values(&self, names: &[Name]) -> &[String] {
-            if let Some(name) = names.first() {
-                let LowLevelArgRef { index, has_arg } =
-                    self.instance_name_to_arg_ref.get(name).unwrap();
-                assert!(*has_arg == HasArg::Yes);
-                &self.opts[*index]
-            } else {
-                &self.frees
-            }
+            let LowLevelArgRef { index, has_arg } =
+                self.instance_name_to_arg_ref.get(&names[0]).unwrap();
+            assert!(*has_arg == HasArg::Yes);
+            &self.opts[*index]
+        }
+
+        pub fn free_iter(&mut self) -> &mut vec::IntoIter<String> {
+            &mut self.frees
         }
     }
 }

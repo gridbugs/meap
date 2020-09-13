@@ -31,11 +31,11 @@ impl Args {
     fn parse() -> Self {
         (args_af::args_map! {
             let {
-                optional_int = opt_opt().s('i');
-                string = opt_req().s('s');
-                durations = opt_multi_via::<ParsableDuration, Duration>();
-                flag = flag().s('f');
-                flag_count = flag_count().s('c');
+                optional_int = opt_opt('i');
+                string = pos_req("STRING");
+                durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
+                flag = flag('f');
+                flag_count = flag_count('c');
             } in {
                 Self {
                     optional_int,
