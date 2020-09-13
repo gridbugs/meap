@@ -121,6 +121,10 @@ pub trait Parser: Sized {
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>>;
 
+    fn allow_unhandled_args(&self) -> bool {
+        false
+    }
+
     fn parse_args<A: IntoIterator<Item = String>>(
         self,
         args: A,
@@ -130,9 +134,10 @@ pub trait Parser: Sized {
             panic!("{}", e);
         }
         let mut low_level_output = low_level_parser.parse(args)?;
+        let allow_unhandled_args = self.allow_unhandled_args();
         let item = self.parse_low_level(&mut low_level_output)?;
         let unhandled_positional_arguments = low_level_output.free_iter().collect::<Vec<_>>();
-        if !unhandled_positional_arguments.is_empty() {
+        if !allow_unhandled_args && !unhandled_positional_arguments.is_empty() {
             return Err(
                 ParseError::UnhandledPositionalArguments(unhandled_positional_arguments).into(),
             );
@@ -153,6 +158,14 @@ pub trait Parser: Sized {
 
     fn map<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Map<Self::Item, U, F, Self> {
         Map { f, parser_t: self }
+    }
+
+    fn with_help<N: IntoName>(self, name: N) -> WithHelp<Self::Item, Self> {
+        WithHelp::new(self, name)
+    }
+
+    fn with_help_default_names(self) -> WithHelp<Self::Item, Self> {
+        WithHelp::new_default_names(self)
     }
 }
 
@@ -541,6 +554,14 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
     pub fn parse_env(self) -> Result<(T, U), Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)
     }
+
+    pub fn with_help<N: IntoName>(self, name: N) -> WithHelp<(T, U), Self> {
+        WithHelp::new(self, name)
+    }
+
+    pub fn with_help_default_names(self) -> WithHelp<(T, U), Self> {
+        WithHelp::new_default_names(self)
+    }
 }
 
 pub struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
@@ -566,6 +587,94 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
     pub fn parse_env(self) -> Result<U, Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)
+    }
+
+    pub fn with_help<N: IntoName>(self, name: N) -> WithHelp<U, Self> {
+        WithHelp::new(self, name)
+    }
+
+    pub fn with_help_default_names(self) -> WithHelp<U, Self> {
+        WithHelp::new_default_names(self)
+    }
+}
+
+#[derive(Debug)]
+pub enum OrHelp<T> {
+    Value(T),
+    Help,
+}
+
+pub struct WithHelp<T, PT: Parser<Item = T>> {
+    parser_t: PT,
+    names: name_type::Named,
+    description: String,
+}
+
+impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
+    pub fn new<N: IntoName>(parser_t: PT, name: N) -> Self {
+        Self {
+            parser_t,
+            names: name_type::Named::new(name),
+            description: "print help message".to_string(),
+        }
+    }
+    pub fn new_default_names(parser_t: PT) -> Self {
+        Self::new(parser_t, 'h').long("help")
+    }
+    pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.description = description.as_ref().to_string();
+        self
+    }
+    pub fn d<S: AsRef<str>>(self, description: S) -> Self {
+        self.description(description)
+    }
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.names.add(name.into_name());
+        self
+    }
+    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
+        self.name(long.as_ref())
+    }
+    pub fn short(self, short: char) -> Self {
+        self.name(short)
+    }
+    pub fn n<N: IntoName>(self, name: N) -> Self {
+        self.name(name)
+    }
+    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
+        self.long(long)
+    }
+    pub fn s(self, short: char) -> Self {
+        self.short(short)
+    }
+    pub fn parse_env(self) -> Result<OrHelp<T>, Box<dyn error::Error>> {
+        <Self as Parser>::parse_env(self)
+    }
+}
+
+impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
+    type Item = OrHelp<T>;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser_t.register_low_level(ll)?;
+        ll.register(self.names.names(), low_level::HasParam::No)
+    }
+
+    fn parse_low_level(
+        self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        match ll.get_flag_count(self.names.names()) {
+            0 => Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?)),
+            1 => Ok(OrHelp::Help),
+            _ => Err(
+                ParseError::ExpectedOneArgument(self.names.names().first().unwrap().clone()).into(),
+            ),
+        }
+    }
+
+    fn allow_unhandled_args(&self) -> bool {
+        true
     }
 }
 

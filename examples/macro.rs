@@ -28,7 +28,7 @@ struct Args {
 }
 
 impl Args {
-    fn parse() -> Self {
+    fn parse() -> meap::OrHelp<Self> {
         match (meap::args_map! {
             let {
                 optional_int = opt_opt('i');
@@ -46,6 +46,7 @@ impl Args {
                 }
             }
         })
+        .with_help_default_names()
         .parse_env()
         {
             Ok(s) => s,
