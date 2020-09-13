@@ -203,11 +203,11 @@ pub mod name_type {
 }
 
 pub struct Arg<A: Arity, H: HaParam, N: NameType> {
-    pub description: Option<String>,
-    pub hint: Option<String>,
-    pub name_type: N,
-    pub arity: A,
-    pub has_param: H,
+    description: Option<String>,
+    hint: Option<String>,
+    name_type: N,
+    _arity: A,
+    _has_param: H,
 }
 
 impl<A: Arity, H: HaParam, N: NameType> Arg<A, H, N> {
@@ -215,15 +215,8 @@ impl<A: Arity, H: HaParam, N: NameType> Arg<A, H, N> {
         self.description = Some(description.as_ref().to_string());
         self
     }
-    pub fn hint<S: AsRef<str>>(mut self, hint: S) -> Self {
-        self.hint = Some(hint.as_ref().to_string());
-        self
-    }
     pub fn d<S: AsRef<str>>(self, description: S) -> Self {
         self.description(description)
-    }
-    pub fn h<S: AsRef<str>>(self, hint: S) -> Self {
-        self.hint(hint)
     }
 }
 
@@ -246,6 +239,16 @@ impl<A: Arity, H: HaParam> Arg<A, H, name_type::Named> {
     }
     pub fn s(self, short: char) -> Self {
         self.short(short)
+    }
+}
+
+impl<V: FromStr, T: From<V>, A: Arity> Arg<A, has_param::YesVia<V, T>, name_type::Named> {
+    pub fn hint<S: AsRef<str>>(mut self, hint: S) -> Self {
+        self.hint = Some(hint.as_ref().to_string());
+        self
+    }
+    pub fn h<S: AsRef<str>>(self, hint: S) -> Self {
+        self.hint(hint)
     }
 }
 
@@ -570,8 +573,8 @@ pub mod prelude {
             description: None,
             hint: None,
             name_type,
-            arity,
-            has_param,
+            _arity: arity,
+            _has_param: has_param,
         }
     }
 
@@ -699,7 +702,9 @@ pub mod prelude {
         arg(arity::Optional, has_param::No, name_type::Named::new(name))
     }
 
-    pub fn flag_count<N: IntoName>(name: N) -> Arg<arity::Multiple, has_param::No, name_type::Named> {
+    pub fn flag_count<N: IntoName>(
+        name: N,
+    ) -> Arg<arity::Multiple, has_param::No, name_type::Named> {
         arg(arity::Multiple, has_param::No, name_type::Named::new(name))
     }
 }
