@@ -1,5 +1,5 @@
 fn main() {
-    use args_af::prelude::*;
+    use meap::prelude::*;
     let (foo, verbosity): (String, _) = opt_req("foo")
         .both(flag_count('v').long("verbose"))
         .parse_env()

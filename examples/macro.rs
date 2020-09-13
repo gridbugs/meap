@@ -29,7 +29,7 @@ struct Args {
 
 impl Args {
     fn parse() -> Self {
-        match (args_af::args_map! {
+        match (meap::args_map! {
             let {
                 optional_int = opt_opt('i');
                 string = pos_req("STRING");
