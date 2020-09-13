@@ -29,7 +29,7 @@ struct Args {
 
 impl Args {
     fn parse() -> Self {
-        (args_af::args_map! {
+        match (args_af::args_map! {
             let {
                 optional_int = opt_opt('i');
                 string = pos_req("STRING");
@@ -47,7 +47,10 @@ impl Args {
             }
         })
         .parse_env()
-        .unwrap()
+        {
+            Ok(s) => s,
+            Err(e) => panic!("{}", e),
+        }
     }
 }
 

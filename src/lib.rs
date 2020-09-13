@@ -1,4 +1,6 @@
 use std::env;
+use std::error;
+use std::fmt;
 use std::str::FromStr;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -9,13 +11,18 @@ pub enum Name {
 
 impl Name {
     fn to_string(&self) -> String {
-        match self {
-            Self::Long(long) => long.clone(),
-            Self::Short(short) => format!("{}", short),
-        }
+        format!("{}", self)
     }
 }
 
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match self {
+            Self::Long(long) => write!(f, "{}", long),
+            Self::Short(short) => write!(f, "{}", short),
+        }
+    }
+}
 pub trait IntoName {
     fn into_name(self) -> Name;
 }
@@ -48,18 +55,61 @@ impl IntoName for String {
 pub enum ParseError {
     UnhandledPositionalArguments(Vec<String>),
     UnknownName(Name),
-    MissingArgumentValue(Name),
-    UnexpectedArgumentValue { name: Name, value: String },
+    ArgumentLacksParameter(Name),
+    UnexpectedArgumentParam { name: Name, value: String },
     MissingRequiredArgument(String),
-    ExpectedOneArgumentValue { name: String, values: Vec<String> },
+    ExpectedOneArgument(Name),
     UnableToParseArgumentValue { name: String, value: String },
-    ExpectedOneFlag { name: String, count: usize },
 }
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match self {
+            Self::UnhandledPositionalArguments(values) => {
+                write!(f, "Unhandled positional arguments: {}", values.join(", "))
+            }
+            Self::UnknownName(name) => write!(f, "Argument \"{}\" does not exist", name),
+            Self::ArgumentLacksParameter(name) => {
+                write!(f, "Argument \"{}\" lacks parameter", name)
+            }
+            Self::UnexpectedArgumentParam { name, value } => {
+                write!(f, "Unexpected param \"{}\" to argument \"{}\"", value, name)
+            }
+            Self::MissingRequiredArgument(name) => {
+                write!(f, "Required argument \"{}\" is missing", name)
+            }
+            Self::ExpectedOneArgument(name) => write!(
+                f,
+                "Argument \"{}\" was passed multiple times but expected at most once",
+                name
+            ),
+            Self::UnableToParseArgumentValue { name, value } => write!(
+                f,
+                "Unable to parse value \"{}\" given for argument \"{}\"",
+                value, name
+            ),
+        }
+    }
+}
+
+impl error::Error for ParseError {}
 
 #[derive(Debug)]
 pub enum SpecError {
     NameUsedMultipleTimes(Name),
 }
+
+impl fmt::Display for SpecError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match self {
+            Self::NameUsedMultipleTimes(name) => {
+                write!(f, "Name used multiple times: {}", name.to_string())
+            }
+        }
+    }
+}
+
+impl error::Error for SpecError {}
 
 pub trait Parser: Sized {
     type Item;
@@ -73,7 +123,9 @@ pub trait Parser: Sized {
 
     fn parse_args<A: IntoIterator<Item = String>>(self, args: A) -> Result<Self::Item, ParseError> {
         let mut low_level_parser = low_level::LowLevelParser::default();
-        self.register_low_level(&mut low_level_parser).unwrap();
+        if let Err(e) = self.register_low_level(&mut low_level_parser) {
+            panic!("{}", e);
+        }
         let mut low_level_output = low_level_parser.parse(args)?;
         let item = self.parse_low_level(&mut low_level_output)?;
         let unhandled_positional_arguments = low_level_output.free_iter().collect::<Vec<_>>();
@@ -352,10 +404,9 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
                     value: values[0].clone(),
                 }
             })?)),
-            _ => Err(ParseError::ExpectedOneArgumentValue {
-                name: name_type.name_for_error(),
-                values: values.to_vec(),
-            }),
+            _ => Err(ParseError::ExpectedOneArgument(
+                name_type.names().first().unwrap().clone(),
+            )),
         }
     }
 }
@@ -379,10 +430,9 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
                     value: values[0].clone(),
                 }
             })?))),
-            _ => Err(ParseError::ExpectedOneArgumentValue {
-                name: name_type.name_for_error(),
-                values: values.to_vec(),
-            }),
+            _ => Err(ParseError::ExpectedOneArgument(
+                name_type.names().first().unwrap().clone(),
+            )),
         }
     }
 }
@@ -422,10 +472,9 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_param::No, n
         match ll.get_flag_count(name_type.names()) {
             0 => Ok(false),
             1 => Ok(true),
-            count => Err(ParseError::ExpectedOneFlag {
-                name: name_type.name_for_error(),
-                count,
-            }),
+            _ => Err(ParseError::ExpectedOneArgument(
+                name_type.names().first().unwrap().clone(),
+            )),
         }
     }
 }
@@ -835,7 +884,7 @@ pub mod low_level {
                                     match has_param {
                                         HaParam::No => flags[*index] += 1,
                                         HaParam::Yes => {
-                                            return Err(ParseError::MissingArgumentValue(
+                                            return Err(ParseError::ArgumentLacksParameter(
                                                 Name::Short(short),
                                             ))
                                         }
@@ -855,10 +904,10 @@ pub mod low_level {
                             HaParam::No => flags[*index] += 1,
                             HaParam::Yes => {
                                 match Token::parse(args_iter.next().ok_or_else(|| {
-                                    ParseError::MissingArgumentValue(name.clone())
+                                    ParseError::ArgumentLacksParameter(name.clone())
                                 })?) {
                                     Token::Word(word) => opts[*index].push(word),
-                                    _ => return Err(ParseError::MissingArgumentValue(name)),
+                                    _ => return Err(ParseError::ArgumentLacksParameter(name)),
                                 }
                             }
                         }
@@ -870,7 +919,7 @@ pub mod low_level {
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
                         match has_param {
                             HaParam::No => {
-                                return Err(ParseError::UnexpectedArgumentValue {
+                                return Err(ParseError::UnexpectedArgumentParam {
                                     name: name.clone(),
                                     value,
                                 })
