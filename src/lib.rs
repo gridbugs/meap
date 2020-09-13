@@ -119,9 +119,12 @@ pub trait Parser: Sized {
     fn parse_low_level(
         self,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError>;
+    ) -> Result<Self::Item, Box<dyn error::Error>>;
 
-    fn parse_args<A: IntoIterator<Item = String>>(self, args: A) -> Result<Self::Item, ParseError> {
+    fn parse_args<A: IntoIterator<Item = String>>(
+        self,
+        args: A,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
         let mut low_level_parser = low_level::LowLevelParser::default();
         if let Err(e) = self.register_low_level(&mut low_level_parser) {
             panic!("{}", e);
@@ -130,14 +133,14 @@ pub trait Parser: Sized {
         let item = self.parse_low_level(&mut low_level_output)?;
         let unhandled_positional_arguments = low_level_output.free_iter().collect::<Vec<_>>();
         if !unhandled_positional_arguments.is_empty() {
-            return Err(ParseError::UnhandledPositionalArguments(
-                unhandled_positional_arguments,
-            ));
+            return Err(
+                ParseError::UnhandledPositionalArguments(unhandled_positional_arguments).into(),
+            );
         }
         Ok(item)
     }
 
-    fn parse_env(self) -> Result<Self::Item, ParseError> {
+    fn parse_env(self) -> Result<Self::Item, Box<dyn error::Error>> {
         self.parse_args(env::args().skip(1))
     }
 
@@ -169,26 +172,26 @@ pub mod arity {
 }
 
 /// Determines whether the opt takes a value as an argument
-pub trait HaParam {
-    fn low_level() -> low_level::HaParam;
+pub trait HasParam {
+    fn low_level() -> low_level::HasParam;
 }
 
 pub mod has_param {
-    use super::{low_level, HaParam};
+    use super::{low_level, HasParam};
     use std::marker::PhantomData;
     use std::str::FromStr;
 
     pub struct YesVia<V: FromStr, T: From<V>>(PhantomData<(V, T)>);
     pub struct No;
 
-    impl<V: FromStr, T: From<V>> HaParam for YesVia<V, T> {
-        fn low_level() -> low_level::HaParam {
-            low_level::HaParam::Yes
+    impl<V: FromStr, T: From<V>> HasParam for YesVia<V, T> {
+        fn low_level() -> low_level::HasParam {
+            low_level::HasParam::Yes
         }
     }
-    impl HaParam for No {
-        fn low_level() -> low_level::HaParam {
-            low_level::HaParam::No
+    impl HasParam for No {
+        fn low_level() -> low_level::HasParam {
+            low_level::HasParam::No
         }
     }
 
@@ -254,7 +257,7 @@ pub mod name_type {
     }
 }
 
-pub struct Arg<A: Arity, H: HaParam, N: NameType> {
+pub struct Arg<A: Arity, H: HasParam, N: NameType> {
     description: Option<String>,
     hint: Option<String>,
     name_type: N,
@@ -262,7 +265,7 @@ pub struct Arg<A: Arity, H: HaParam, N: NameType> {
     _has_param: H,
 }
 
-impl<A: Arity, H: HaParam, N: NameType> Arg<A, H, N> {
+impl<A: Arity, H: HasParam, N: NameType> Arg<A, H, N> {
     pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = Some(description.as_ref().to_string());
         self
@@ -272,7 +275,7 @@ impl<A: Arity, H: HaParam, N: NameType> Arg<A, H, N> {
     }
 }
 
-impl<A: Arity, H: HaParam> Arg<A, H, name_type::Named> {
+impl<A: Arity, H: HasParam> Arg<A, H, name_type::Named> {
     pub fn name<N: IntoName>(mut self, name: N) -> Self {
         self.name_type.add(name.into_name());
         self
@@ -311,7 +314,7 @@ pub trait SingleArgParser<N: NameType> {
         &self,
         name_type: &N,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError>;
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>>;
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
@@ -323,7 +326,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
         &self,
         name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let value = ll
             .free_iter()
             .next()
@@ -346,7 +349,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
         &self,
         name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         if let Some(value) = ll.free_iter().next() {
             Ok(Some(T::from(value.parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
@@ -369,7 +372,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
         &self,
         name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let mut ret = Vec::new();
         for value in ll.free_iter() {
             ret.push(T::from(value.parse().map_err(|_| {
@@ -392,21 +395,19 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
         &self,
         name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let values = ll.get_opt_values(name_type.names());
         match values.len() {
-            0 => Err(ParseError::MissingRequiredArgument(
-                name_type.name_for_error(),
-            )),
+            0 => Err(ParseError::MissingRequiredArgument(name_type.name_for_error()).into()),
             1 => Ok(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
                     name: name_type.name_for_error(),
                     value: values[0].clone(),
                 }
             })?)),
-            _ => Err(ParseError::ExpectedOneArgument(
-                name_type.names().first().unwrap().clone(),
-            )),
+            _ => Err(
+                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
+            ),
         }
     }
 }
@@ -420,7 +421,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
         &self,
         name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let values = ll.get_opt_values(name_type.names());
         match values.len() {
             0 => Ok(None),
@@ -430,9 +431,9 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
                     value: values[0].clone(),
                 }
             })?))),
-            _ => Err(ParseError::ExpectedOneArgument(
-                name_type.names().first().unwrap().clone(),
-            )),
+            _ => Err(
+                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
+            ),
         }
     }
 }
@@ -446,7 +447,7 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
         &self,
         name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let values = ll.get_opt_values(name_type.names());
         let mut ret = Vec::with_capacity(values.len());
         for v in values {
@@ -468,13 +469,13 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_param::No, n
         &self,
         name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         match ll.get_flag_count(name_type.names()) {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(ParseError::ExpectedOneArgument(
-                name_type.names().first().unwrap().clone(),
-            )),
+            _ => Err(
+                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
+            ),
         }
     }
 }
@@ -486,12 +487,12 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_param::No, n
         &self,
         name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::SingleArgItem, ParseError> {
+    ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         Ok(ll.get_flag_count(name_type.names()))
     }
 }
 
-impl<A: Arity, H: HaParam, N: NameType> Parser for Arg<A, H, N>
+impl<A: Arity, H: HasParam, N: NameType> Parser for Arg<A, H, N>
 where
     Self: SingleArgParser<N>,
 {
@@ -507,7 +508,7 @@ where
     fn parse_low_level(
         self,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
         self.parse_single_arg(&self.name_type, ll)
     }
 }
@@ -528,7 +529,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
     fn parse_low_level(
         self,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
         Ok((
             self.parser_t.parse_low_level(ll)?,
             self.parser_u.parse_low_level(ll)?,
@@ -537,7 +538,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
 }
 
 impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
-    pub fn parse_env(self) -> Result<(T, U), ParseError> {
+    pub fn parse_env(self) -> Result<(T, U), Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)
     }
 }
@@ -557,13 +558,13 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     fn parse_low_level(
         self,
         ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, ParseError> {
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
         Ok((self.f)(self.parser_t.parse_low_level(ll)?))
     }
 }
 
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
-    pub fn parse_env(self) -> Result<U, ParseError> {
+    pub fn parse_env(self) -> Result<U, Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)
     }
 }
@@ -613,7 +614,7 @@ pub mod prelude {
     pub use super::Parser;
     use super::*;
 
-    pub fn arg<A: Arity, H: HaParam, N: NameType>(
+    pub fn arg<A: Arity, H: HasParam, N: NameType>(
         arity: A,
         has_param: H,
         name_type: N,
@@ -761,10 +762,11 @@ pub mod prelude {
 pub mod low_level {
     use super::{Name, ParseError, SpecError};
     use std::collections::HashMap;
+    use std::error;
     use std::vec;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum HaParam {
+    pub enum HasParam {
         Yes,
         No,
     }
@@ -772,7 +774,7 @@ pub mod low_level {
     #[derive(Clone, Copy)]
     struct LowLevelArgRef {
         index: usize,
-        has_param: HaParam,
+        has_param: HasParam,
     }
 
     #[derive(Default)]
@@ -830,10 +832,10 @@ pub mod low_level {
     }
 
     impl LowLevelParser {
-        pub fn register(&mut self, names: &[Name], has_param: HaParam) -> Result<(), SpecError> {
+        pub fn register(&mut self, names: &[Name], has_param: HasParam) -> Result<(), SpecError> {
             let index = match has_param {
-                HaParam::No => &mut self.flag_count,
-                HaParam::Yes => &mut self.opt_count,
+                HasParam::No => &mut self.flag_count,
+                HasParam::Yes => &mut self.opt_count,
             };
             let arg_ref = LowLevelArgRef {
                 index: *index,
@@ -852,7 +854,7 @@ pub mod low_level {
         pub fn parse<A: IntoIterator<Item = String>>(
             self,
             args: A,
-        ) -> Result<LowLevelParserOutput, ParseError> {
+        ) -> Result<LowLevelParserOutput, Box<dyn error::Error>> {
             let LowLevelParser {
                 instance_name_to_arg_ref,
                 flag_count,
@@ -872,7 +874,7 @@ pub mod low_level {
                             .get(&Name::Short(first))
                             .ok_or_else(|| ParseError::UnknownName(Name::Short(first)))?;
                         match has_param {
-                            HaParam::No => {
+                            HasParam::No => {
                                 flags[*index] += 1;
                                 for short in rest.chars() {
                                     let LowLevelArgRef { index, has_param } =
@@ -882,16 +884,17 @@ pub mod low_level {
                                                 ParseError::UnknownName(Name::Short(short))
                                             })?;
                                     match has_param {
-                                        HaParam::No => flags[*index] += 1,
-                                        HaParam::Yes => {
+                                        HasParam::No => flags[*index] += 1,
+                                        HasParam::Yes => {
                                             return Err(ParseError::ArgumentLacksParameter(
                                                 Name::Short(short),
-                                            ))
+                                            )
+                                            .into())
                                         }
                                     }
                                 }
                             }
-                            HaParam::Yes => {
+                            HasParam::Yes => {
                                 opts[*index].push(rest);
                             }
                         }
@@ -901,13 +904,15 @@ pub mod low_level {
                             .get(&name)
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
                         match has_param {
-                            HaParam::No => flags[*index] += 1,
-                            HaParam::Yes => {
+                            HasParam::No => flags[*index] += 1,
+                            HasParam::Yes => {
                                 match Token::parse(args_iter.next().ok_or_else(|| {
                                     ParseError::ArgumentLacksParameter(name.clone())
                                 })?) {
                                     Token::Word(word) => opts[*index].push(word),
-                                    _ => return Err(ParseError::ArgumentLacksParameter(name)),
+                                    _ => {
+                                        return Err(ParseError::ArgumentLacksParameter(name).into())
+                                    }
                                 }
                             }
                         }
@@ -918,13 +923,14 @@ pub mod low_level {
                             .get(&name)
                             .ok_or_else(|| ParseError::UnknownName(name.clone()))?;
                         match has_param {
-                            HaParam::No => {
+                            HasParam::No => {
                                 return Err(ParseError::UnexpectedArgumentParam {
                                     name: name.clone(),
                                     value,
-                                })
+                                }
+                                .into())
                             }
-                            HaParam::Yes => opts[*index].push(value),
+                            HasParam::Yes => opts[*index].push(value),
                         }
                     }
                 }
@@ -945,14 +951,14 @@ pub mod low_level {
         pub fn get_flag_count(&self, names: &[Name]) -> usize {
             let LowLevelArgRef { index, has_param } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
-            assert!(*has_param == HaParam::No);
+            assert!(*has_param == HasParam::No);
             self.flags[*index]
         }
 
         pub fn get_opt_values(&self, names: &[Name]) -> &[String] {
             let LowLevelArgRef { index, has_param } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
-            assert!(*has_param == HaParam::Yes);
+            assert!(*has_param == HasParam::Yes);
             &self.opts[*index]
         }
 
