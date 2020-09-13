@@ -96,10 +96,10 @@ pub mod has_arg {
     use std::marker::PhantomData;
     use std::str::FromStr;
 
-    pub struct Yes<T: FromStr>(PhantomData<T>);
+    pub struct YesVia<V: FromStr, T: From<V>>(PhantomData<(V, T)>);
     pub struct No;
 
-    impl<T: FromStr> HasArg for Yes<T> {
+    impl<V: FromStr, T: From<V>> HasArg for YesVia<V, T> {
         fn low_level() -> low_level::HasArg {
             low_level::HasArg::Yes
         }
@@ -110,7 +110,7 @@ pub mod has_arg {
         }
     }
 
-    impl<T: FromStr> Default for Yes<T> {
+    impl<V: FromStr, T: From<V>> Default for YesVia<V, T> {
         fn default() -> Self {
             Self(PhantomData)
         }
@@ -183,28 +183,40 @@ pub mod prelude {
         }
     }
 
-    pub fn opt_opt<T: FromStr>() -> Opt<arity::Optional, has_arg::Yes<T>> {
-        opt(arity::Optional, has_arg::Yes::default())
+    pub fn opt_opt<T: FromStr>() -> Opt<arity::Optional, has_arg::YesVia<T, T>> {
+        opt(arity::Optional, has_arg::YesVia::default())
     }
 
-    pub fn opt_req<T: FromStr>() -> Opt<arity::Required, has_arg::Yes<T>> {
-        opt(arity::Required, has_arg::Yes::default())
+    pub fn opt_req<T: FromStr>() -> Opt<arity::Required, has_arg::YesVia<T, T>> {
+        opt(arity::Required, has_arg::YesVia::default())
     }
 
-    pub fn opt_multi<T: FromStr>() -> Opt<arity::Multiple, has_arg::Yes<T>> {
-        opt(arity::Multiple, has_arg::Yes::default())
+    pub fn opt_multi<T: FromStr>() -> Opt<arity::Multiple, has_arg::YesVia<T, T>> {
+        opt(arity::Multiple, has_arg::YesVia::default())
     }
 
-    pub fn flag_opt() -> Opt<arity::Optional, has_arg::No> {
+    pub fn opt_opt_via<V: FromStr, T: From<V>>() -> Opt<arity::Optional, has_arg::YesVia<V, T>> {
+        opt(arity::Optional, has_arg::YesVia::default())
+    }
+
+    pub fn opt_req_via<V: FromStr, T: From<V>>() -> Opt<arity::Required, has_arg::YesVia<V, T>> {
+        opt(arity::Required, has_arg::YesVia::default())
+    }
+
+    pub fn opt_multi_via<V: FromStr, T: From<V>>() -> Opt<arity::Multiple, has_arg::YesVia<V, T>> {
+        opt(arity::Multiple, has_arg::YesVia::default())
+    }
+
+    pub fn flag() -> Opt<arity::Optional, has_arg::No> {
         opt(arity::Optional, has_arg::No)
     }
 
-    pub fn flag_multi() -> Opt<arity::Multiple, has_arg::No> {
+    pub fn flag_count() -> Opt<arity::Multiple, has_arg::No> {
         opt(arity::Multiple, has_arg::No)
     }
 }
 
-impl<T: FromStr> OptParser for Opt<arity::Required, has_arg::Yes<T>> {
+impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Required, has_arg::YesVia<V, T>> {
     type OptItem = T;
 
     fn parse_opt(
@@ -215,32 +227,7 @@ impl<T: FromStr> OptParser for Opt<arity::Required, has_arg::Yes<T>> {
         let values = ll.get_opt_values(names);
         match values.len() {
             0 => Err(ParseError::MissingRequiredArgument(names.to_vec())),
-            1 => values[0]
-                .parse()
-                .map_err(|_| ParseError::UnableToParseArgumentValue {
-                    names: names.to_vec(),
-                    value: values[0].clone(),
-                }),
-            _ => Err(ParseError::ExpectedOneArgumentValue {
-                names: names.to_vec(),
-                values: values.to_vec(),
-            }),
-        }
-    }
-}
-
-impl<T: FromStr> OptParser for Opt<arity::Optional, has_arg::Yes<T>> {
-    type OptItem = Option<T>;
-
-    fn parse_opt(
-        &self,
-        names: &[Name],
-        ll: &low_level::LowLevelParserOutput,
-    ) -> Result<Self::OptItem, ParseError> {
-        let values = ll.get_opt_values(names);
-        match values.len() {
-            0 => Ok(None),
-            1 => Ok(Some(values[0].parse().map_err(|_| {
+            1 => Ok(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentValue {
                     names: names.to_vec(),
                     value: values[0].clone(),
@@ -254,7 +241,32 @@ impl<T: FromStr> OptParser for Opt<arity::Optional, has_arg::Yes<T>> {
     }
 }
 
-impl<T: FromStr> OptParser for Opt<arity::Multiple, has_arg::Yes<T>> {
+impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Optional, has_arg::YesVia<V, T>> {
+    type OptItem = Option<T>;
+
+    fn parse_opt(
+        &self,
+        names: &[Name],
+        ll: &low_level::LowLevelParserOutput,
+    ) -> Result<Self::OptItem, ParseError> {
+        let values = ll.get_opt_values(names);
+        match values.len() {
+            0 => Ok(None),
+            1 => Ok(Some(T::from(values[0].parse().map_err(|_| {
+                ParseError::UnableToParseArgumentValue {
+                    names: names.to_vec(),
+                    value: values[0].clone(),
+                }
+            })?))),
+            _ => Err(ParseError::ExpectedOneArgumentValue {
+                names: names.to_vec(),
+                values: values.to_vec(),
+            }),
+        }
+    }
+}
+
+impl<V: FromStr, T: From<V>> OptParser for Opt<arity::Multiple, has_arg::YesVia<V, T>> {
     type OptItem = Vec<T>;
 
     fn parse_opt(
@@ -265,13 +277,12 @@ impl<T: FromStr> OptParser for Opt<arity::Multiple, has_arg::Yes<T>> {
         let values = ll.get_opt_values(names);
         let mut ret = Vec::with_capacity(values.len());
         for v in values {
-            ret.push(
-                v.parse()
-                    .map_err(|_| ParseError::UnableToParseArgumentValue {
-                        names: names.to_vec(),
-                        value: v.clone(),
-                    })?,
-            );
+            ret.push(T::from(v.parse().map_err(|_| {
+                ParseError::UnableToParseArgumentValue {
+                    names: names.to_vec(),
+                    value: v.clone(),
+                }
+            })?));
         }
         Ok(ret)
     }
@@ -356,6 +367,12 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
     }
 }
 
+impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
+    pub fn parse_env(self) -> Result<(T, U), ParseError> {
+        <Self as Parser>::parse_env(self)
+    }
+}
+
 pub struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
     f: F,
     parser_t: PT,
@@ -374,6 +391,53 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     ) -> Result<Self::Item, ParseError> {
         Ok((self.f)(self.parser_t.parse_low_level(ll)?))
     }
+}
+
+impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
+    pub fn parse_env(self) -> Result<U, ParseError> {
+        <Self as Parser>::parse_env(self)
+    }
+}
+
+#[macro_export]
+macro_rules! unflatten_closure {
+    ( $p:pat => $tup:expr ) => {
+        |$p| $tup
+    };
+    ( $p:pat => ( $($tup:tt)* ), $head:expr $(, $tail:expr)* ) => {
+        $crate::unflatten_closure!( ($p, a) => ( $($tup)*, a) $(, $tail )* )
+    };
+}
+
+#[macro_export]
+macro_rules! args_all {
+    ( $only:expr ) => {
+        $only
+    };
+    ( $head:expr, $($tail:expr),* $(,)* ) => {
+        $head $( .both($tail) )*
+            .map(
+                $crate::unflatten_closure!(a => (a) $(, $tail )*)
+            )
+    };
+}
+
+#[macro_export]
+macro_rules! args_map {
+    ( let { $var1:ident = $a1:expr; } in { $b:expr } ) => {
+        {
+            use $crate::prelude::*;
+            $a1.map(|$var1| $b)
+        }
+    };
+    ( let { $var1:ident = $a1:expr; $($var:ident = $a:expr;)+ } in { $b:expr } ) => {
+        {
+            use $crate::prelude::*;
+            { $crate::args_all! {
+                                    $a1, $($a),*
+                                } } .map(|($var1, $($var),*)| $b)
+        }
+    };
 }
 
 pub mod low_level {
@@ -409,9 +473,9 @@ pub mod low_level {
 
     enum Token {
         Name(Name),
-        ShortSequence(String),
         Word(String),
-        Assignment { long: String, value: String },
+        LongAssignment { long: String, value: String },
+        ShortSequence { first: char, rest: String },
         Separator,
     }
 
@@ -424,7 +488,7 @@ pub mod low_level {
                 if assignment_split.len() == 1 {
                     Token::Name(Name::Long(long.to_string()))
                 } else {
-                    Token::Assignment {
+                    Token::LongAssignment {
                         long: assignment_split[0].to_string(),
                         value: assignment_split[1].to_string(),
                     }
@@ -433,7 +497,13 @@ pub mod low_level {
                 match shorts.len() {
                     0 => Token::Word("-".to_string()),
                     1 => Token::Name(Name::Short(shorts.chars().next().unwrap())),
-                    _ => Token::ShortSequence(shorts.to_string()),
+                    _ => {
+                        let (first, rest) = shorts.split_at(1);
+                        Token::ShortSequence {
+                            first: first.chars().next().unwrap(),
+                            rest: rest.to_string(),
+                        }
+                    }
                 }
             } else {
                 Token::Word(s)
@@ -494,18 +564,32 @@ pub mod low_level {
                             return Err(ParseError::UnexpectedPositionalArgument(word));
                         }
                     }
-                    Token::ShortSequence(shorts) => {
-                        for short in shorts.chars() {
-                            let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
-                                .get(&Name::Short(short))
-                                .ok_or_else(|| ParseError::UnknownName(Name::Short(short)))?;
-                            match has_arg {
-                                HasArg::No => flags[*index] += 1,
-                                HasArg::Yes => {
-                                    return Err(ParseError::MissingArgumentValue(Name::Short(
-                                        short,
-                                    )))
+                    Token::ShortSequence { first, rest } => {
+                        let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
+                            .get(&Name::Short(first))
+                            .ok_or_else(|| ParseError::UnknownName(Name::Short(first)))?;
+                        match has_arg {
+                            HasArg::No => {
+                                flags[*index] += 1;
+                                for short in rest.chars() {
+                                    let LowLevelArgRef { index, has_arg } =
+                                        instance_name_to_arg_ref
+                                            .get(&Name::Short(short))
+                                            .ok_or_else(|| {
+                                                ParseError::UnknownName(Name::Short(short))
+                                            })?;
+                                    match has_arg {
+                                        HasArg::No => flags[*index] += 1,
+                                        HasArg::Yes => {
+                                            return Err(ParseError::MissingArgumentValue(
+                                                Name::Short(short),
+                                            ))
+                                        }
+                                    }
                                 }
+                            }
+                            HasArg::Yes => {
+                                opts[*index].push(rest);
                             }
                         }
                     }
@@ -525,7 +609,7 @@ pub mod low_level {
                             }
                         }
                     }
-                    Token::Assignment { long, value } => {
+                    Token::LongAssignment { long, value } => {
                         let name = Name::Long(long);
                         let LowLevelArgRef { index, has_arg } = instance_name_to_arg_ref
                             .get(&name)
