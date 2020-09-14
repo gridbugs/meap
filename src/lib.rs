@@ -18,8 +18,8 @@ impl Name {
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Self::Long(long) => write!(f, "{}", long),
-            Self::Short(short) => write!(f, "{}", short),
+            Self::Long(long) => write!(f, "--{}", long),
+            Self::Short(short) => write!(f, "-{}", short),
         }
     }
 }
@@ -57,9 +57,11 @@ pub enum ParseError {
     UnknownName(Name),
     ArgumentLacksParameter(Name),
     UnexpectedArgumentParam { name: Name, value: String },
-    MissingRequiredArgument(String),
+    MissingRequiredPositionalArgument(String),
+    MissingRequiredArgument(Name),
     ExpectedOneArgument(Name),
-    UnableToParseArgumentValue { name: String, value: String },
+    UnableToParsePositionalArgumentParam { name: String, value: String },
+    UnableToParseArgumentParam { name: Name, value: String },
 }
 
 impl fmt::Display for ParseError {
@@ -75,6 +77,9 @@ impl fmt::Display for ParseError {
             Self::UnexpectedArgumentParam { name, value } => {
                 write!(f, "Unexpected param \"{}\" to argument \"{}\"", value, name)
             }
+            Self::MissingRequiredPositionalArgument(name) => {
+                write!(f, "Required positional argument \"{}\" is missing", name)
+            }
             Self::MissingRequiredArgument(name) => {
                 write!(f, "Required argument \"{}\" is missing", name)
             }
@@ -83,9 +88,14 @@ impl fmt::Display for ParseError {
                 "Argument \"{}\" was passed multiple times but expected at most once",
                 name
             ),
-            Self::UnableToParseArgumentValue { name, value } => write!(
+            Self::UnableToParseArgumentParam { name, value } => write!(
                 f,
                 "Unable to parse value \"{}\" given for argument \"{}\"",
+                value, name
+            ),
+            Self::UnableToParsePositionalArgumentParam { name, value } => write!(
+                f,
+                "Unable to parse \"{}\" given for positional argument \"{}\"",
                 value, name
             ),
         }
@@ -216,7 +226,6 @@ pub mod has_param {
 }
 
 pub trait NameType {
-    fn name_for_error(&self) -> String;
     fn names_to_register(&self) -> Option<&[Name]>;
 }
 
@@ -231,17 +240,11 @@ pub mod name_type {
     }
 
     impl NameType for Named {
-        fn name_for_error(&self) -> String {
-            self.names[0].to_string()
-        }
         fn names_to_register(&self) -> Option<&[Name]> {
             Some(&self.names)
         }
     }
     impl NameType for Positional {
-        fn name_for_error(&self) -> String {
-            self.name.clone()
-        }
         fn names_to_register(&self) -> Option<&[Name]> {
             None
         }
@@ -259,6 +262,9 @@ pub mod name_type {
         pub fn names(&self) -> &[Name] {
             &self.names
         }
+        pub fn first_name(&self) -> &Name {
+            &self.names[0]
+        }
     }
 
     impl Positional {
@@ -266,6 +272,9 @@ pub mod name_type {
             Self {
                 name: name.as_ref().to_string(),
             }
+        }
+        pub fn name(&self) -> &str {
+            self.name.as_str()
         }
     }
 }
@@ -340,13 +349,12 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
         name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        let value = ll
-            .free_iter()
-            .next()
-            .ok_or_else(|| ParseError::MissingRequiredArgument(name_type.name_for_error()))?;
+        let value = ll.free_iter().next().ok_or_else(|| {
+            ParseError::MissingRequiredPositionalArgument(name_type.name().to_string())
+        })?;
         Ok(T::from(value.parse().map_err(|_| {
-            ParseError::UnableToParseArgumentValue {
-                name: name_type.name_for_error(),
+            ParseError::UnableToParsePositionalArgumentParam {
+                name: name_type.name().to_string(),
                 value,
             }
         })?))
@@ -365,8 +373,8 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         if let Some(value) = ll.free_iter().next() {
             Ok(Some(T::from(value.parse().map_err(|_| {
-                ParseError::UnableToParseArgumentValue {
-                    name: name_type.name_for_error(),
+                ParseError::UnableToParsePositionalArgumentParam {
+                    name: name_type.name().to_string(),
                     value,
                 }
             })?)))
@@ -389,8 +397,8 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
         let mut ret = Vec::new();
         for value in ll.free_iter() {
             ret.push(T::from(value.parse().map_err(|_| {
-                ParseError::UnableToParseArgumentValue {
-                    name: name_type.name_for_error(),
+                ParseError::UnableToParsePositionalArgumentParam {
+                    name: name_type.name().to_string(),
                     value,
                 }
             })?));
@@ -411,16 +419,14 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let values = ll.get_opt_values(name_type.names());
         match values.len() {
-            0 => Err(ParseError::MissingRequiredArgument(name_type.name_for_error()).into()),
+            0 => Err(ParseError::MissingRequiredArgument(name_type.first_name().clone()).into()),
             1 => Ok(T::from(values[0].parse().map_err(|_| {
-                ParseError::UnableToParseArgumentValue {
-                    name: name_type.name_for_error(),
+                ParseError::UnableToParseArgumentParam {
+                    name: name_type.first_name().clone(),
                     value: values[0].clone(),
                 }
             })?)),
-            _ => Err(
-                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
-            ),
+            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
         }
     }
 }
@@ -439,14 +445,12 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
         match values.len() {
             0 => Ok(None),
             1 => Ok(Some(T::from(values[0].parse().map_err(|_| {
-                ParseError::UnableToParseArgumentValue {
-                    name: name_type.name_for_error(),
+                ParseError::UnableToParseArgumentParam {
+                    name: name_type.first_name().clone(),
                     value: values[0].clone(),
                 }
             })?))),
-            _ => Err(
-                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
-            ),
+            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
         }
     }
 }
@@ -465,8 +469,8 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
         let mut ret = Vec::with_capacity(values.len());
         for v in values {
             ret.push(T::from(v.parse().map_err(|_| {
-                ParseError::UnableToParseArgumentValue {
-                    name: name_type.name_for_error(),
+                ParseError::UnableToParseArgumentParam {
+                    name: name_type.first_name().clone(),
                     value: v.clone(),
                 }
             })?));
@@ -486,9 +490,7 @@ impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_param::No, n
         match ll.get_flag_count(name_type.names()) {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(
-                ParseError::ExpectedOneArgument(name_type.names().first().unwrap().clone()).into(),
-            ),
+            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
         }
     }
 }
@@ -667,9 +669,7 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
         match ll.get_flag_count(self.names.names()) {
             0 => Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?)),
             1 => Ok(OrHelp::Help),
-            _ => Err(
-                ParseError::ExpectedOneArgument(self.names.names().first().unwrap().clone()).into(),
-            ),
+            _ => Err(ParseError::ExpectedOneArgument(self.names.first_name().clone()).into()),
         }
     }
 
