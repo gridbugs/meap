@@ -283,12 +283,9 @@ pub struct Arg<A: Arity, H: HasParam, N: NameType> {
 }
 
 impl<A: Arity, H: HasParam, N: NameType> Arg<A, H, N> {
-    pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = Some(description.as_ref().to_string());
         self
-    }
-    pub fn d<S: AsRef<str>>(self, description: S) -> Self {
-        self.description(description)
     }
 }
 
@@ -302,15 +299,6 @@ impl<A: Arity, H: HasParam> Arg<A, H, name_type::Named> {
     }
     pub fn short(self, short: char) -> Self {
         self.name(short)
-    }
-    pub fn n<N: IntoName>(self, name: N) -> Self {
-        self.name(name)
-    }
-    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
-        self.long(long)
-    }
-    pub fn s(self, short: char) -> Self {
-        self.short(short)
     }
 }
 
@@ -601,12 +589,9 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
     pub fn new_default_names(parser_t: PT) -> Self {
         Self::new(parser_t, 'h').long("help")
     }
-    pub fn description<S: AsRef<str>>(mut self, description: S) -> Self {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = description.as_ref().to_string();
         self
-    }
-    pub fn d<S: AsRef<str>>(self, description: S) -> Self {
-        self.description(description)
     }
     pub fn name<N: IntoName>(mut self, name: N) -> Self {
         self.names.add(name.into_name());
@@ -617,15 +602,6 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
     }
     pub fn short(self, short: char) -> Self {
         self.name(short)
-    }
-    pub fn n<N: IntoName>(self, name: N) -> Self {
-        self.name(name)
-    }
-    pub fn l<S: AsRef<str>>(self, long: S) -> Self {
-        self.long(long)
-    }
-    pub fn s(self, short: char) -> Self {
-        self.short(short)
     }
     pub fn parse_env(self) -> Result<OrHelp<T>, Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)
