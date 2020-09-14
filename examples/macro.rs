@@ -31,7 +31,7 @@ impl Args {
     fn parse() -> meap::OrHelp<Self> {
         match (meap::args_map! {
             let {
-                optional_int = opt_opt('i');
+                optional_int = opt_opt("INT", 'i');
                 string = pos_req("STRING");
                 durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
                 flag = flag('f');

@@ -60,7 +60,7 @@ pub enum ParseError {
     MissingRequiredPositionalArgument(String),
     MissingRequiredArgument(Name),
     ExpectedOneArgument(Name),
-    UnableToParsePositionalArgumentParam { name: String, value: String },
+    UnableToParsePositionalArgumentParam { hint: String, value: String },
     UnableToParseArgumentParam { name: Name, value: String },
 }
 
@@ -77,8 +77,8 @@ impl fmt::Display for ParseError {
             Self::UnexpectedArgumentParam { name, value } => {
                 write!(f, "Unexpected param \"{}\" to argument \"{}\"", value, name)
             }
-            Self::MissingRequiredPositionalArgument(name) => {
-                write!(f, "Required positional argument \"{}\" is missing", name)
+            Self::MissingRequiredPositionalArgument(hint) => {
+                write!(f, "Required positional argument \"{}\" is missing", hint)
             }
             Self::MissingRequiredArgument(name) => {
                 write!(f, "Required argument \"{}\" is missing", name)
@@ -88,14 +88,14 @@ impl fmt::Display for ParseError {
                 "Argument \"{}\" was passed multiple times but expected at most once",
                 name
             ),
+            Self::UnableToParsePositionalArgumentParam { hint, value } => write!(
+                f,
+                "Unable to parse \"{}\" given for positional argument \"{}\"",
+                value, hint
+            ),
             Self::UnableToParseArgumentParam { name, value } => write!(
                 f,
                 "Unable to parse value \"{}\" given for argument \"{}\"",
-                value, name
-            ),
-            Self::UnableToParsePositionalArgumentParam { name, value } => write!(
-                f,
-                "Unable to parse \"{}\" given for positional argument \"{}\"",
                 value, name
             ),
         }
@@ -204,7 +204,10 @@ pub mod has_param {
     use std::marker::PhantomData;
     use std::str::FromStr;
 
-    pub struct YesVia<V: FromStr, T: From<V>>(PhantomData<(V, T)>);
+    pub struct YesVia<V: FromStr, T: From<V>> {
+        hint: String,
+        phantom: PhantomData<(V, T)>,
+    }
     pub struct No;
 
     impl<V: FromStr, T: From<V>> HasParam for YesVia<V, T> {
@@ -218,9 +221,15 @@ pub mod has_param {
         }
     }
 
-    impl<V: FromStr, T: From<V>> Default for YesVia<V, T> {
-        fn default() -> Self {
-            Self(PhantomData)
+    impl<V: FromStr, T: From<V>> YesVia<V, T> {
+        pub fn new<H: AsRef<str>>(hint: H) -> Self {
+            Self {
+                hint: hint.as_ref().to_string(),
+                phantom: PhantomData,
+            }
+        }
+        pub fn hint(&self) -> &str {
+            self.hint.as_str()
         }
     }
 }
@@ -235,9 +244,7 @@ pub mod name_type {
     pub struct Named {
         names: Vec<Name>,
     }
-    pub struct Positional {
-        name: String,
-    }
+    pub struct Positional;
 
     impl NameType for Named {
         fn names_to_register(&self) -> Option<&[Name]> {
@@ -266,25 +273,13 @@ pub mod name_type {
             &self.names[0]
         }
     }
-
-    impl Positional {
-        pub fn new<N: AsRef<str>>(name: N) -> Self {
-            Self {
-                name: name.as_ref().to_string(),
-            }
-        }
-        pub fn name(&self) -> &str {
-            self.name.as_str()
-        }
-    }
 }
 
 pub struct Arg<A: Arity, H: HasParam, N: NameType> {
     description: Option<String>,
-    hint: Option<String>,
     name_type: N,
+    has_param: H,
     _arity: A,
-    _has_param: H,
 }
 
 impl<A: Arity, H: HasParam, N: NameType> Arg<A, H, N> {
@@ -319,62 +314,49 @@ impl<A: Arity, H: HasParam> Arg<A, H, name_type::Named> {
     }
 }
 
-impl<V: FromStr, T: From<V>, A: Arity> Arg<A, has_param::YesVia<V, T>, name_type::Named> {
-    pub fn hint<S: AsRef<str>>(mut self, hint: S) -> Self {
-        self.hint = Some(hint.as_ref().to_string());
-        self
-    }
-    pub fn h<S: AsRef<str>>(self, hint: S) -> Self {
-        self.hint(hint)
-    }
-}
-
-pub trait SingleArgParser<N: NameType> {
+pub trait SingleArgParser {
     type SingleArgItem;
 
     fn parse_single_arg(
         &self,
-        name_type: &N,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>>;
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Required, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = T;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let value = ll.free_iter().next().ok_or_else(|| {
-            ParseError::MissingRequiredPositionalArgument(name_type.name().to_string())
+            ParseError::MissingRequiredPositionalArgument(self.has_param.hint().to_string())
         })?;
         Ok(T::from(value.parse().map_err(|_| {
             ParseError::UnableToParsePositionalArgumentParam {
-                name: name_type.name().to_string(),
+                hint: self.has_param.hint().to_string(),
                 value,
             }
         })?))
     }
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = Option<T>;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         if let Some(value) = ll.free_iter().next() {
             Ok(Some(T::from(value.parse().map_err(|_| {
                 ParseError::UnableToParsePositionalArgumentParam {
-                    name: name_type.name().to_string(),
+                    hint: self.has_param.hint().to_string(),
                     value,
                 }
             })?)))
@@ -384,21 +366,20 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
     }
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Positional>
 {
     type SingleArgItem = Vec<T>;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Positional,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
         let mut ret = Vec::new();
         for value in ll.free_iter() {
             ret.push(T::from(value.parse().map_err(|_| {
                 ParseError::UnableToParsePositionalArgumentParam {
-                    name: name_type.name().to_string(),
+                    hint: self.has_param.hint().to_string(),
                     value,
                 }
             })?));
@@ -407,70 +388,69 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Positional>
     }
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Required, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = T;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        let values = ll.get_opt_values(name_type.names());
+        let values = ll.get_opt_values(self.name_type.names());
         match values.len() {
-            0 => Err(ParseError::MissingRequiredArgument(name_type.first_name().clone()).into()),
+            0 => {
+                Err(ParseError::MissingRequiredArgument(self.name_type.first_name().clone()).into())
+            }
             1 => Ok(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentParam {
-                    name: name_type.first_name().clone(),
+                    name: self.name_type.first_name().clone(),
                     value: values[0].clone(),
                 }
             })?)),
-            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
+            _ => Err(ParseError::ExpectedOneArgument(self.name_type.first_name().clone()).into()),
         }
     }
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = Option<T>;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        let values = ll.get_opt_values(name_type.names());
+        let values = ll.get_opt_values(self.name_type.names());
         match values.len() {
             0 => Ok(None),
             1 => Ok(Some(T::from(values[0].parse().map_err(|_| {
                 ParseError::UnableToParseArgumentParam {
-                    name: name_type.first_name().clone(),
+                    name: self.name_type.first_name().clone(),
                     value: values[0].clone(),
                 }
             })?))),
-            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
+            _ => Err(ParseError::ExpectedOneArgument(self.name_type.first_name().clone()).into()),
         }
     }
 }
 
-impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
+impl<V: FromStr, T: From<V>> SingleArgParser
     for Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Named>
 {
     type SingleArgItem = Vec<T>;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        let values = ll.get_opt_values(name_type.names());
+        let values = ll.get_opt_values(self.name_type.names());
         let mut ret = Vec::with_capacity(values.len());
         for v in values {
             ret.push(T::from(v.parse().map_err(|_| {
                 ParseError::UnableToParseArgumentParam {
-                    name: name_type.first_name().clone(),
+                    name: self.name_type.first_name().clone(),
                     value: v.clone(),
                 }
             })?));
@@ -479,39 +459,37 @@ impl<V: FromStr, T: From<V>> SingleArgParser<name_type::Named>
     }
 }
 
-impl SingleArgParser<name_type::Named> for Arg<arity::Optional, has_param::No, name_type::Named> {
+impl SingleArgParser for Arg<arity::Optional, has_param::No, name_type::Named> {
     type SingleArgItem = bool;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        match ll.get_flag_count(name_type.names()) {
+        match ll.get_flag_count(self.name_type.names()) {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(ParseError::ExpectedOneArgument(name_type.first_name().clone()).into()),
+            _ => Err(ParseError::ExpectedOneArgument(self.name_type.first_name().clone()).into()),
         }
     }
 }
 
-impl SingleArgParser<name_type::Named> for Arg<arity::Multiple, has_param::No, name_type::Named> {
+impl SingleArgParser for Arg<arity::Multiple, has_param::No, name_type::Named> {
     type SingleArgItem = usize;
 
     fn parse_single_arg(
         &self,
-        name_type: &name_type::Named,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>> {
-        Ok(ll.get_flag_count(name_type.names()))
+        Ok(ll.get_flag_count(self.name_type.names()))
     }
 }
 
 impl<A: Arity, H: HasParam, N: NameType> Parser for Arg<A, H, N>
 where
-    Self: SingleArgParser<N>,
+    Self: SingleArgParser,
 {
-    type Item = <Self as SingleArgParser<N>>::SingleArgItem;
+    type Item = <Self as SingleArgParser>::SingleArgItem;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
         if let Some(names) = self.name_type.names_to_register() {
@@ -524,7 +502,7 @@ where
         self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
-        self.parse_single_arg(&self.name_type, ll)
+        self.parse_single_arg(ll)
     }
 }
 
@@ -730,129 +708,134 @@ pub mod prelude {
     ) -> Arg<A, H, N> {
         Arg {
             description: None,
-            hint: None,
             name_type,
+            has_param,
             _arity: arity,
-            _has_param: has_param,
         }
     }
 
     pub fn pos_opt<T: FromStr>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Optional, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Optional,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn pos_req<T: FromStr>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Required, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Required,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn pos_multi<T: FromStr>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Multiple, has_param::YesVia<T, T>, name_type::Positional> {
         arg(
             arity::Multiple,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn pos_opt_via<V: FromStr, T: From<V>>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Optional,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn pos_req_via<V: FromStr, T: From<V>>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Required, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Required,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn pos_multi_via<V: FromStr, T: From<V>>(
-        name: &str,
+        hint: &str,
     ) -> Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Positional> {
         arg(
             arity::Multiple,
-            has_param::YesVia::default(),
-            name_type::Positional::new(name),
+            has_param::YesVia::new(hint),
+            name_type::Positional,
         )
     }
 
     pub fn opt_opt<T: FromStr, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Optional, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Optional,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_req<T: FromStr, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Required, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Required,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_multi<T: FromStr, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Multiple, has_param::YesVia<T, T>, name_type::Named> {
         arg(
             arity::Multiple,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_opt_via<V: FromStr, T: From<V>, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Optional,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_req_via<V: FromStr, T: From<V>, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Required, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Required,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
 
     pub fn opt_multi_via<V: FromStr, T: From<V>, N: IntoName>(
+        hint: &str,
         name: N,
     ) -> Arg<arity::Multiple, has_param::YesVia<V, T>, name_type::Named> {
         arg(
             arity::Multiple,
-            has_param::YesVia::default(),
+            has_param::YesVia::new(hint),
             name_type::Named::new(name),
         )
     }
