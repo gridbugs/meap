@@ -135,6 +135,8 @@ pub trait Parser: Sized {
         false
     }
 
+    fn update_help(self, help: &mut Help);
+
     fn parse_args<A: IntoIterator<Item = String>>(
         self,
         args: A,
@@ -180,23 +182,45 @@ pub trait Parser: Sized {
 }
 
 /// Determines how many times the opt can be passed
-pub trait Arity {}
+pub trait Arity {
+    fn arity_enum(&self) -> ArityEnum;
+}
+
+#[derive(Debug)]
+pub enum ArityEnum {
+    Required,
+    Optional,
+    Multiple,
+}
 
 pub mod arity {
-    use super::Arity;
+    use super::{Arity, ArityEnum};
 
     pub struct Required;
     pub struct Optional;
     pub struct Multiple;
 
-    impl Arity for Required {}
-    impl Arity for Optional {}
-    impl Arity for Multiple {}
+    impl Arity for Required {
+        fn arity_enum(&self) -> ArityEnum {
+            ArityEnum::Required
+        }
+    }
+    impl Arity for Optional {
+        fn arity_enum(&self) -> ArityEnum {
+            ArityEnum::Optional
+        }
+    }
+    impl Arity for Multiple {
+        fn arity_enum(&self) -> ArityEnum {
+            ArityEnum::Multiple
+        }
+    }
 }
 
 /// Determines whether the opt takes a value as an argument
 pub trait HasParam {
     fn low_level() -> low_level::HasParam;
+    fn maybe_hint(&self) -> Option<&str>;
 }
 
 pub mod has_param {
@@ -214,10 +238,16 @@ pub mod has_param {
         fn low_level() -> low_level::HasParam {
             low_level::HasParam::Yes
         }
+        fn maybe_hint(&self) -> Option<&str> {
+            Some(self.hint.as_str())
+        }
     }
     impl HasParam for No {
         fn low_level() -> low_level::HasParam {
             low_level::HasParam::No
+        }
+        fn maybe_hint(&self) -> Option<&str> {
+            None
         }
     }
 
@@ -241,6 +271,7 @@ pub trait NameType {
 pub mod name_type {
     use super::{IntoName, Name, NameType};
 
+    #[derive(Debug)]
     pub struct Named {
         names: Vec<Name>,
     }
@@ -279,7 +310,7 @@ pub struct Arg<A: Arity, H: HasParam, N: NameType> {
     description: Option<String>,
     name_type: N,
     has_param: H,
-    _arity: A,
+    arity: A,
 }
 
 impl<A: Arity, H: HasParam, N: NameType> Arg<A, H, N> {
@@ -309,6 +340,10 @@ pub trait SingleArgParser {
         &self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::SingleArgItem, Box<dyn error::Error>>;
+}
+
+pub trait SingleArgParserHelp {
+    fn into_help_message(self) -> HelpMessage;
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser
@@ -473,9 +508,32 @@ impl SingleArgParser for Arg<arity::Multiple, has_param::No, name_type::Named> {
     }
 }
 
+impl<A: Arity, H: HasParam> SingleArgParserHelp for Arg<A, H, name_type::Named> {
+    fn into_help_message(self) -> HelpMessage {
+        HelpMessage::Named(HelpNamed {
+            names: self.name_type,
+            hint: self.has_param.maybe_hint().map(|h| h.to_string()),
+            description: self.description,
+            arity: self.arity.arity_enum(),
+        })
+    }
+}
+
+impl<V: FromStr, T: From<V>, A: Arity> SingleArgParserHelp
+    for Arg<A, has_param::YesVia<V, T>, name_type::Positional>
+{
+    fn into_help_message(self) -> HelpMessage {
+        HelpMessage::Positional(HelpPositional {
+            hint: self.has_param.hint().to_string(),
+            description: self.description,
+            arity: self.arity.arity_enum(),
+        })
+    }
+}
+
 impl<A: Arity, H: HasParam, N: NameType> Parser for Arg<A, H, N>
 where
-    Self: SingleArgParser,
+    Self: SingleArgParser + SingleArgParserHelp,
 {
     type Item = <Self as SingleArgParser>::SingleArgItem;
 
@@ -491,6 +549,13 @@ where
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         self.parse_single_arg(ll)
+    }
+
+    fn update_help(self, help: &mut Help) {
+        match self.into_help_message() {
+            HelpMessage::Named(help_named) => help.named.push(help_named),
+            HelpMessage::Positional(help_positional) => help.positional.push(help_positional),
+        }
     }
 }
 
@@ -515,6 +580,11 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
             self.parser_t.parse_low_level(ll)?,
             self.parser_u.parse_low_level(ll)?,
         ))
+    }
+
+    fn update_help(self, help: &mut Help) {
+        self.parser_t.update_help(help);
+        self.parser_u.update_help(help);
     }
 }
 
@@ -550,6 +620,10 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         Ok((self.f)(self.parser_t.parse_low_level(ll)?))
     }
+
+    fn update_help(self, help: &mut Help) {
+        self.parser_t.update_help(help);
+    }
 }
 
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
@@ -569,7 +643,7 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
 #[derive(Debug)]
 pub enum OrHelp<T> {
     Value(T),
-    Help,
+    Help(Help),
 }
 
 pub struct WithHelp<T, PT: Parser<Item = T>> {
@@ -622,7 +696,11 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         match ll.get_flag_count(self.names.names()) {
             0 => Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?)),
-            1 => Ok(OrHelp::Help),
+            1 => {
+                let mut help = Help::default();
+                self.update_help(&mut help);
+                Ok(OrHelp::Help(help))
+            }
             _ => Err(ParseError::ExpectedOneArgument(self.names.first_name().clone()).into()),
         }
     }
@@ -630,6 +708,43 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
     fn allow_unhandled_args(&self) -> bool {
         true
     }
+
+    fn update_help(self, help: &mut Help) {
+        self.parser_t.update_help(help);
+        help.named.push(HelpNamed {
+            names: self.names,
+            hint: None,
+            description: Some(self.description),
+            arity: ArityEnum::Optional,
+        });
+    }
+}
+
+#[derive(Debug)]
+pub struct HelpPositional {
+    pub hint: String,
+    pub description: Option<String>,
+    pub arity: ArityEnum,
+}
+
+#[derive(Debug)]
+pub struct HelpNamed {
+    pub names: name_type::Named,
+    pub hint: Option<String>,
+    pub description: Option<String>,
+    pub arity: ArityEnum,
+}
+
+#[derive(Debug)]
+pub enum HelpMessage {
+    Positional(HelpPositional),
+    Named(HelpNamed),
+}
+
+#[derive(Debug, Default)]
+pub struct Help {
+    pub positional: Vec<HelpPositional>,
+    pub named: Vec<HelpNamed>,
 }
 
 #[macro_export]
@@ -686,7 +801,7 @@ pub mod prelude {
             description: None,
             name_type,
             has_param,
-            _arity: arity,
+            arity,
         }
     }
 
