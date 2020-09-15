@@ -139,9 +139,10 @@ pub trait Parser: Sized {
 
     fn parse_args<A: IntoIterator<Item = String>>(
         self,
+        program_name: String,
         args: A,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
-        let mut low_level_parser = low_level::LowLevelParser::default();
+        let mut low_level_parser = low_level::LowLevelParser::new(program_name);
         if let Err(e) = self.register_low_level(&mut low_level_parser) {
             panic!("{}", e);
         }
@@ -158,7 +159,9 @@ pub trait Parser: Sized {
     }
 
     fn parse_env(self) -> Result<Self::Item, Box<dyn error::Error>> {
-        self.parse_args(env::args().skip(1))
+        let mut env = env::args();
+        let program_name = env.next().expect("no args");
+        self.parse_args(program_name, env)
     }
 
     fn both<PU: Parser>(self, other: PU) -> Both<Self::Item, PU::Item, Self, PU> {
@@ -343,7 +346,7 @@ pub trait SingleArgParser {
 }
 
 pub trait SingleArgParserHelp {
-    fn into_help_message(self) -> HelpMessage;
+    fn into_help_message(self) -> ArgHelp;
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser
@@ -509,8 +512,8 @@ impl SingleArgParser for Arg<arity::Multiple, has_param::No, name_type::Named> {
 }
 
 impl<A: Arity, H: HasParam> SingleArgParserHelp for Arg<A, H, name_type::Named> {
-    fn into_help_message(self) -> HelpMessage {
-        HelpMessage::Named(HelpNamed {
+    fn into_help_message(self) -> ArgHelp {
+        ArgHelp::Named(ArgHelpNamed {
             names: self.name_type,
             hint: self.has_param.maybe_hint().map(|h| h.to_string()),
             description: self.description,
@@ -522,8 +525,8 @@ impl<A: Arity, H: HasParam> SingleArgParserHelp for Arg<A, H, name_type::Named> 
 impl<V: FromStr, T: From<V>, A: Arity> SingleArgParserHelp
     for Arg<A, has_param::YesVia<V, T>, name_type::Positional>
 {
-    fn into_help_message(self) -> HelpMessage {
-        HelpMessage::Positional(HelpPositional {
+    fn into_help_message(self) -> ArgHelp {
+        ArgHelp::Positional(ArgHelpPositional {
             hint: self.has_param.hint().to_string(),
             description: self.description,
             arity: self.arity.arity_enum(),
@@ -553,8 +556,8 @@ where
 
     fn update_help(self, help: &mut Help) {
         match self.into_help_message() {
-            HelpMessage::Named(help_named) => help.named.push(help_named),
-            HelpMessage::Positional(help_positional) => help.positional.push(help_positional),
+            ArgHelp::Named(help_named) => help.named.push(help_named),
+            ArgHelp::Positional(help_positional) => help.positional.push(help_positional),
         }
     }
 }
@@ -697,7 +700,7 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
         match ll.get_flag_count(self.names.names()) {
             0 => Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?)),
             1 => {
-                let mut help = Help::default();
+                let mut help = Help::new(ll.program_name().to_string());
                 self.update_help(&mut help);
                 Ok(OrHelp::Help(help))
             }
@@ -711,7 +714,7 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
 
     fn update_help(self, help: &mut Help) {
         self.parser_t.update_help(help);
-        help.named.push(HelpNamed {
+        help.named.push(ArgHelpNamed {
             names: self.names,
             hint: None,
             description: Some(self.description),
@@ -721,14 +724,14 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
 }
 
 #[derive(Debug)]
-pub struct HelpPositional {
+pub struct ArgHelpPositional {
     pub hint: String,
     pub description: Option<String>,
     pub arity: ArityEnum,
 }
 
 #[derive(Debug)]
-pub struct HelpNamed {
+pub struct ArgHelpNamed {
     pub names: name_type::Named,
     pub hint: Option<String>,
     pub description: Option<String>,
@@ -736,15 +739,26 @@ pub struct HelpNamed {
 }
 
 #[derive(Debug)]
-pub enum HelpMessage {
-    Positional(HelpPositional),
-    Named(HelpNamed),
+pub enum ArgHelp {
+    Positional(ArgHelpPositional),
+    Named(ArgHelpNamed),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Help {
-    pub positional: Vec<HelpPositional>,
-    pub named: Vec<HelpNamed>,
+    pub program_name: String,
+    pub positional: Vec<ArgHelpPositional>,
+    pub named: Vec<ArgHelpNamed>,
+}
+
+impl Help {
+    pub fn new(program_name: String) -> Self {
+        Self {
+            program_name,
+            positional: Vec::new(),
+            named: Vec::new(),
+        }
+    }
 }
 
 #[macro_export]
@@ -960,14 +974,15 @@ pub mod low_level {
         has_param: HasParam,
     }
 
-    #[derive(Default)]
     pub struct LowLevelParser {
+        program_name: String,
         instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flag_count: usize,
         opt_count: usize,
     }
 
     pub struct LowLevelParserOutput {
+        program_name: String,
         instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
         flags: Vec<usize>,
         opts: Vec<Vec<String>>,
@@ -1015,6 +1030,15 @@ pub mod low_level {
     }
 
     impl LowLevelParser {
+        pub fn new(program_name: String) -> Self {
+            Self {
+                program_name,
+                instance_name_to_arg_ref: HashMap::default(),
+                flag_count: 0,
+                opt_count: 0,
+            }
+        }
+
         pub fn register(&mut self, names: &[Name], has_param: HasParam) -> Result<(), SpecError> {
             let index = match has_param {
                 HasParam::No => &mut self.flag_count,
@@ -1039,6 +1063,7 @@ pub mod low_level {
             args: A,
         ) -> Result<LowLevelParserOutput, Box<dyn error::Error>> {
             let LowLevelParser {
+                program_name,
                 instance_name_to_arg_ref,
                 flag_count,
                 opt_count,
@@ -1122,6 +1147,7 @@ pub mod low_level {
                 frees.push(arg);
             }
             Ok(LowLevelParserOutput {
+                program_name,
                 instance_name_to_arg_ref,
                 flags,
                 opts,
@@ -1131,6 +1157,10 @@ pub mod low_level {
     }
 
     impl LowLevelParserOutput {
+        pub fn program_name(&self) -> &str {
+            self.program_name.as_str()
+        }
+
         pub fn get_flag_count(&self, names: &[Name]) -> usize {
             let LowLevelArgRef { index, has_param } =
                 self.instance_name_to_arg_ref.get(&names[0]).unwrap();
