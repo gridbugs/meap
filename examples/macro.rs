@@ -28,7 +28,7 @@ struct Args {
 }
 
 impl Args {
-    fn parse() -> meap::OrHelp<Self> {
+    fn parse() -> meap::parser::OrHelp<Self> {
         match (meap::args_map! {
             let {
                 optional_int = opt_opt("INT", 'i');
