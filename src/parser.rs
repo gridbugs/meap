@@ -776,7 +776,11 @@ impl fmt::Display for Help {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "Usage: {} [OPTIONS]", self.program_name)?;
         for p in &self.positional {
-            write!(f, " {}", p.hint)?;
+            match p.arity {
+                ArityEnum::Required => write!(f, " {}", p.hint)?,
+                ArityEnum::Optional => write!(f, " [{}]", p.hint)?,
+                ArityEnum::Multiple => write!(f, " [{} ...]", p.hint)?,
+            }
         }
         Ok(())
     }
