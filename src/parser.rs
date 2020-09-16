@@ -24,6 +24,7 @@ impl fmt::Display for Name {
         }
     }
 }
+
 pub trait IntoName {
     fn into_name(self) -> Name;
 }
@@ -768,5 +769,15 @@ impl Help {
             positional: Vec::new(),
             named: Vec::new(),
         }
+    }
+}
+
+impl fmt::Display for Help {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "Usage: {} [OPTIONS]", self.program_name)?;
+        for p in &self.positional {
+            write!(f, " {}", p.hint)?;
+        }
+        Ok(())
     }
 }

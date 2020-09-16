@@ -56,5 +56,8 @@ impl Args {
 }
 
 fn main() {
-    println!("{:#?}", Args::parse());
+    match Args::parse() {
+        meap::parser::OrHelp::Help(help) => println!("{}", help),
+        meap::parser::OrHelp::Value(args) => println!("{:?}", args),
+    }
 }
