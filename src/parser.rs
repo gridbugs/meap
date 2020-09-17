@@ -658,7 +658,7 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
         &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
-        Ok((self.f.take().expect("Function has already been called"))(
+        Ok((self.f.take().expect("function has already been called"))(
             self.parser_t.parse_low_level(ll)?,
         ))
     }
@@ -792,6 +792,142 @@ impl Help {
             positional: Vec::new(),
             named: Vec::new(),
         }
+    }
+}
+
+pub struct WithDefaultLazy<V: FromStr, T: From<V>, F: FnOnce() -> T> {
+    thunk: Option<F>,
+    description: String,
+    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
+}
+
+enum ValueOrDescription<T> {
+    Value(T),
+    Description(String),
+}
+
+pub struct WithDefaultDisplay<V: FromStr, T: fmt::Display + From<V>> {
+    value_or_description: ValueOrDescription<T>,
+    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
+}
+
+pub struct WithDefaultDescribed<V: FromStr, T: From<V>> {
+    value: Option<T>,
+    description: String,
+    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
+}
+
+impl<V: FromStr, T: From<V>, F: FnOnce() -> T> Parser for WithDefaultLazy<V, T, F> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.arg.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        self.arg.parse_low_level(ll).map(|maybe_item| {
+            maybe_item.unwrap_or_else(self.thunk.take().expect("function has already been called"))
+        })
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        let mut help_message = match self.arg.help_message() {
+            ArgHelp::Named(help_named) => help_named,
+            ArgHelp::Positional(_) => panic!("named arg gave positional help message"),
+        };
+        help_message.description = Some(if let Some(description) = help_message.description {
+            format!("{} (Default: {})", description, self.description)
+        } else {
+            format!("Default: {}", self.description)
+        });
+        help.named.push(help_message);
+    }
+}
+
+impl<V: FromStr, T: fmt::Display + From<V>> Parser for WithDefaultDisplay<V, T> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.arg.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        self.arg.parse_low_level(ll).map(|maybe_item| {
+            if let Some(item) = maybe_item {
+                item
+            } else {
+                use std::mem;
+                let value_or_description = mem::replace(
+                    &mut self.value_or_description,
+                    ValueOrDescription::Description("".to_string()),
+                );
+                let value = match value_or_description {
+                    ValueOrDescription::Value(value) => value,
+                    ValueOrDescription::Description(_) => {
+                        panic!("default value has alread been used")
+                    }
+                };
+                self.value_or_description = ValueOrDescription::Description(format!("{}", value));
+                value
+            }
+        })
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        let mut help_message = match self.arg.help_message() {
+            ArgHelp::Named(help_named) => help_named,
+            ArgHelp::Positional(_) => panic!("named arg gave positional help message"),
+        };
+        let default_description = match &self.value_or_description {
+            ValueOrDescription::Description(default_description) => default_description.clone(),
+            ValueOrDescription::Value(value) => format!("{}", value),
+        };
+        help_message.description = Some(if let Some(description) = help_message.description {
+            format!("{} (Default: {})", description, default_description)
+        } else {
+            format!("Default: {}", default_description)
+        });
+        help.named.push(help_message);
+    }
+}
+
+impl<V: FromStr, T: From<V>> Parser for WithDefaultDescribed<V, T> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.arg.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        self.arg.parse_low_level(ll).map(|maybe_item| {
+            maybe_item.unwrap_or_else(|| {
+                self.value
+                    .take()
+                    .expect("default value has already been used")
+            })
+        })
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        let mut help_message = match self.arg.help_message() {
+            ArgHelp::Named(help_named) => help_named,
+            ArgHelp::Positional(_) => panic!("named arg gave positional help message"),
+        };
+        help_message.description = Some(if let Some(description) = help_message.description {
+            format!("{} (Default: {})", description, self.description)
+        } else {
+            format!("Default: {}", self.description)
+        });
+        help.named.push(help_message);
     }
 }
 
