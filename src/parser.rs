@@ -739,6 +739,7 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
             1 => {
                 let mut help = Help::new(ll.program_name().to_string());
                 self.update_help(&mut help);
+                for _ in ll.free_iter() {} // drain the free arguments
                 Ok(OrHelp::Help(help))
             }
             _ => Err(ParseError::ExpectedOneArgument(self.names.first_name().clone()).into()),
