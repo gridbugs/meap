@@ -231,7 +231,7 @@ pub trait Arity {
     fn arity_enum(&self) -> ArityEnum;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ArityEnum {
     Required,
     Optional,
@@ -844,10 +844,13 @@ impl fmt::Display for Help {
                     .map(|name| name.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let name_list_with_arity = match n.arity {
-                    ArityEnum::Required => format!("{}", name_list),
-                    ArityEnum::Optional => format!("[{}]", name_list),
-                    ArityEnum::Multiple => format!("[{} ...]", name_list),
+                let name_list_with_arity = match (n.arity, n.hint.as_ref()) {
+                    (ArityEnum::Required, None) => format!("{}", name_list),
+                    (ArityEnum::Optional, None) => format!("[{}]", name_list),
+                    (ArityEnum::Multiple, None) => format!("[{} ...]", name_list),
+                    (ArityEnum::Required, Some(hint)) => format!("{} {}", name_list, hint),
+                    (ArityEnum::Optional, Some(hint)) => format!("[{} {}]", name_list, hint),
+                    (ArityEnum::Multiple, Some(hint)) => format!("[{} {} ...]", name_list, hint),
                 };
                 if let Some(description) = n.description.as_ref() {
                     if name_list.len() < OPT_SINGLE_LINE_MAX_ARG_LENGTH {
