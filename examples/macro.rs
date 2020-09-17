@@ -28,8 +28,8 @@ struct Args {
 }
 
 impl Args {
-    fn parse() -> meap::parser::OrHelp<Self> {
-        match (meap::args_map! {
+    fn parse() -> Self {
+        (meap::args_map! {
             let {
                 optional_int = opt_opt("INT", 'i');
                 string = pos_req("STRING").desc("a string");
@@ -46,18 +46,12 @@ impl Args {
                 }
             }
         })
-        .with_help_default_names()
-        .parse_env()
-        {
-            Ok(s) => s,
-            Err(e) => panic!("{}", e),
-        }
+        .with_help_default()
+        .parse_env_or_exit()
     }
 }
 
 fn main() {
-    match Args::parse() {
-        meap::parser::OrHelp::Help(help) => println!("{}", help),
-        meap::parser::OrHelp::Value(args) => println!("{:?}", args),
-    }
+    let args = Args::parse();
+    println!("{:?}", args);
 }

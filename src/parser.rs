@@ -2,6 +2,7 @@ use crate::low_level;
 use std::env;
 use std::error;
 use std::fmt;
+use std::process;
 use std::str::FromStr;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -123,44 +124,80 @@ impl fmt::Display for SpecError {
 
 impl error::Error for SpecError {}
 
+/// A parser whose one-time-use state has been used up, and is only good for generating help
+/// messages.
+pub struct SpentParser<P: Parser> {
+    parser: P,
+    program_name: String,
+}
+
+impl<P: Parser> SpentParser<P> {
+    pub fn into_help(self) -> Help {
+        let mut help = Help::new(self.program_name);
+        self.parser.update_help(&mut help);
+        help
+    }
+}
+
 pub trait Parser: Sized {
     type Item;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError>;
 
     fn parse_low_level(
-        self,
+        &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>>;
 
-    fn allow_unhandled_args(&self) -> bool {
-        false
-    }
-
-    fn update_help(self, help: &mut Help);
+    fn update_help(&self, help: &mut Help);
 
     fn parse_args<A: IntoIterator<Item = String>>(
-        self,
+        mut self,
         program_name: String,
         args: A,
-    ) -> Result<Self::Item, Box<dyn error::Error>> {
-        let mut low_level_parser = low_level::LowLevelParser::new(program_name);
+    ) -> Result<Self::Item, (Box<dyn error::Error>, SpentParser<Self>)> {
+        let mut low_level_parser = low_level::LowLevelParser::new(program_name.clone());
         if let Err(e) = self.register_low_level(&mut low_level_parser) {
             panic!("{}", e);
         }
-        let mut low_level_output = low_level_parser.parse(args)?;
-        let allow_unhandled_args = self.allow_unhandled_args();
-        let item = self.parse_low_level(&mut low_level_output)?;
+        let mut low_level_output = match low_level_parser.parse(args) {
+            Ok(low_level_output) => low_level_output,
+            Err(parse_error) => {
+                return Err((
+                    parse_error,
+                    SpentParser {
+                        parser: self,
+                        program_name,
+                    },
+                ))
+            }
+        };
+        let item = match self.parse_low_level(&mut low_level_output) {
+            Ok(item) => item,
+            Err(parse_error) => {
+                return Err((
+                    parse_error,
+                    SpentParser {
+                        parser: self,
+                        program_name,
+                    },
+                ))
+            }
+        };
         let unhandled_positional_arguments = low_level_output.free_iter().collect::<Vec<_>>();
-        if !allow_unhandled_args && !unhandled_positional_arguments.is_empty() {
-            return Err(
+        if !unhandled_positional_arguments.is_empty() {
+            return Err((
                 ParseError::UnhandledPositionalArguments(unhandled_positional_arguments).into(),
-            );
+                SpentParser {
+                    parser: self,
+                    program_name,
+                },
+            ));
         }
         Ok(item)
     }
 
-    fn parse_env(self) -> Result<Self::Item, Box<dyn error::Error>> {
+    fn parse_env(self) -> Result<Self::Item, (Box<dyn error::Error>, SpentParser<Self>)> {
         let mut env = env::args();
         let program_name = env.next().expect("no args");
         self.parse_args(program_name, env)
@@ -174,7 +211,10 @@ pub trait Parser: Sized {
     }
 
     fn map<U, F: FnOnce(Self::Item) -> U>(self, f: F) -> Map<Self::Item, U, F, Self> {
-        Map { f, parser_t: self }
+        Map {
+            f: Some(f),
+            parser_t: self,
+        }
     }
 
     fn with_help<N: IntoName>(self, name: N) -> WithHelp<Self::Item, Self> {
@@ -276,7 +316,7 @@ pub trait NameType {
 pub mod name_type {
     use super::{IntoName, Name, NameType};
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Named {
         names: Vec<Name>,
     }
@@ -351,7 +391,7 @@ pub trait SingleArgParser {
 }
 
 pub trait SingleArgParserHelp {
-    fn into_help_message(self) -> ArgHelp;
+    fn help_message(&self) -> ArgHelp;
 }
 
 impl<V: FromStr, T: From<V>> SingleArgParser
@@ -517,11 +557,11 @@ impl SingleArgParser for Arg<arity::Multiple, has_param::No, name_type::Named> {
 }
 
 impl<A: Arity, H: HasParam> SingleArgParserHelp for Arg<A, H, name_type::Named> {
-    fn into_help_message(self) -> ArgHelp {
+    fn help_message(&self) -> ArgHelp {
         ArgHelp::Named(ArgHelpNamed {
-            names: self.name_type,
+            names: self.name_type.clone(),
             hint: self.has_param.maybe_hint().map(|h| h.to_string()),
-            description: self.description,
+            description: self.description.clone(),
             arity: self.arity.arity_enum(),
         })
     }
@@ -530,10 +570,10 @@ impl<A: Arity, H: HasParam> SingleArgParserHelp for Arg<A, H, name_type::Named> 
 impl<V: FromStr, T: From<V>, A: Arity> SingleArgParserHelp
     for Arg<A, has_param::YesVia<V, T>, name_type::Positional>
 {
-    fn into_help_message(self) -> ArgHelp {
+    fn help_message(&self) -> ArgHelp {
         ArgHelp::Positional(ArgHelpPositional {
             hint: self.has_param.hint().to_string(),
-            description: self.description,
+            description: self.description.clone(),
             arity: self.arity.arity_enum(),
         })
     }
@@ -553,14 +593,14 @@ where
     }
 
     fn parse_low_level(
-        self,
+        &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         self.parse_single_arg(ll)
     }
 
-    fn update_help(self, help: &mut Help) {
-        match self.into_help_message() {
+    fn update_help(&self, help: &mut Help) {
+        match self.help_message() {
             ArgHelp::Named(help_named) => help.named.push(help_named),
             ArgHelp::Positional(help_positional) => help.positional.push(help_positional),
         }
@@ -581,7 +621,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
     }
 
     fn parse_low_level(
-        self,
+        &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         Ok((
@@ -590,7 +630,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
         ))
     }
 
-    fn update_help(self, help: &mut Help) {
+    fn update_help(&self, help: &mut Help) {
         self.parser_t.update_help(help);
         self.parser_u.update_help(help);
     }
@@ -603,7 +643,7 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
 }
 
 pub struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
-    f: F,
+    f: Option<F>,
     parser_t: PT,
 }
 
@@ -615,13 +655,15 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     }
 
     fn parse_low_level(
-        self,
+        &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
-        Ok((self.f)(self.parser_t.parse_low_level(ll)?))
+        Ok((self.f.take().expect("Function has already been called"))(
+            self.parser_t.parse_low_level(ll)?,
+        ))
     }
 
-    fn update_help(self, help: &mut Help) {
+    fn update_help(&self, help: &mut Help) {
         self.parser_t.update_help(help);
     }
 }
@@ -664,7 +706,19 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
         self
     }
     pub fn parse_env_or_exit(self) -> T {
-        todo!()
+        match self.parse_env() {
+            Ok(OrHelp::Value(item)) => item,
+            Ok(OrHelp::Help(help)) => {
+                println!("{}", help);
+                process::exit(0);
+            }
+            Err((error, spent_parser)) => {
+                let help = spent_parser.into_help();
+                eprintln!("{}\n", error);
+                eprintln!("{}", help);
+                process::exit(2);
+            }
+        }
     }
 }
 
@@ -677,7 +731,7 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
     }
 
     fn parse_low_level(
-        self,
+        &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
         match ll.get_flag_count(self.names.names()) {
@@ -691,16 +745,12 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
         }
     }
 
-    fn allow_unhandled_args(&self) -> bool {
-        true
-    }
-
-    fn update_help(self, help: &mut Help) {
+    fn update_help(&self, help: &mut Help) {
         self.parser_t.update_help(help);
         help.named.push(ArgHelpNamed {
-            names: self.names,
+            names: self.names.clone(),
             hint: None,
-            description: Some(self.description),
+            description: Some(self.description.clone()),
             arity: ArityEnum::Optional,
         });
     }
@@ -794,21 +844,26 @@ impl fmt::Display for Help {
                     .map(|name| name.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
+                let name_list_with_arity = match n.arity {
+                    ArityEnum::Required => format!("{}", name_list),
+                    ArityEnum::Optional => format!("[{}]", name_list),
+                    ArityEnum::Multiple => format!("[{} ...]", name_list),
+                };
                 if let Some(description) = n.description.as_ref() {
                     if name_list.len() < OPT_SINGLE_LINE_MAX_ARG_LENGTH {
                         write!(
                             f,
                             "    {:width$} {}",
-                            name_list,
+                            name_list_with_arity,
                             description,
                             width = OPT_SINGLE_LINE_MAX_ARG_LENGTH,
                         )?;
                     } else {
-                        writeln!(f, "    {}", name_list)?;
+                        writeln!(f, "    {}", name_list_with_arity)?;
                         write!(f, "                {}", description)?;
                     }
                 } else {
-                    write!(f, "    {}", name_list)?;
+                    write!(f, "    {}", name_list_with_arity)?;
                 }
             }
         }
