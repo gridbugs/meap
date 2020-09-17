@@ -762,12 +762,70 @@ impl Help {
 
 impl fmt::Display for Help {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        const ARG_SINGLE_LINE_MAX_ARG_LENGTH: usize = 16;
+        const OPT_SINGLE_LINE_MAX_ARG_LENGTH: usize = 32;
         write!(f, "Usage: {} [OPTIONS]", self.program_name)?;
         for p in &self.positional {
             match p.arity {
                 ArityEnum::Required => write!(f, " {}", p.hint)?,
                 ArityEnum::Optional => write!(f, " [{}]", p.hint)?,
                 ArityEnum::Multiple => write!(f, " [{} ...]", p.hint)?,
+            }
+        }
+        if !self.positional.is_empty() {
+            write!(f, "\n\nArgs:")?;
+            for p in &self.positional {
+                writeln!(f)?;
+                let hint = match p.arity {
+                    ArityEnum::Required => format!("{}", p.hint),
+                    ArityEnum::Optional => format!("[{}]", p.hint),
+                    ArityEnum::Multiple => format!("[{} ...]", p.hint),
+                };
+                if let Some(description) = p.description.as_ref() {
+                    if hint.len() < ARG_SINGLE_LINE_MAX_ARG_LENGTH {
+                        write!(
+                            f,
+                            "    {:width$} {}",
+                            hint,
+                            description,
+                            width = ARG_SINGLE_LINE_MAX_ARG_LENGTH,
+                        )?;
+                    } else {
+                        writeln!(f, "    {}", hint)?;
+                        write!(f, "                {}", description)?;
+                    }
+                } else {
+                    write!(f, "    {}", hint)?;
+                }
+            }
+        }
+        if !self.named.is_empty() {
+            write!(f, "\n\nOptions:")?;
+            for n in &self.named {
+                writeln!(f)?;
+                let name_list = n
+                    .names
+                    .names()
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if let Some(description) = n.description.as_ref() {
+                    if name_list.len() < OPT_SINGLE_LINE_MAX_ARG_LENGTH {
+                        write!(
+                            f,
+                            "    {:width$} {}",
+                            name_list,
+                            description,
+                            width = OPT_SINGLE_LINE_MAX_ARG_LENGTH,
+                        )?;
+                    } else {
+                        writeln!(f, "    {}", name_list)?;
+                        write!(f, "                {}", description)?;
+                    }
+                } else {
+                    write!(f, "    {}", name_list)?;
+                }
             }
         }
         Ok(())
