@@ -4,6 +4,11 @@ description = "Minimal Extensible Argument Parser"
 version = "0.1.0"
 authors = ["Stephen Sherratt <stephen@sherra.tt>"]
 edition = "2018"
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/stevebob/meap.git"
+repository = "https://github.com/stevebob/meap.git"
+documentation = "https://docs.rs/meap"
 
 [dependencies]
 
