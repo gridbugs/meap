@@ -181,8 +181,8 @@ pub trait Parser: Sized {
         WithHelp::new(self, name)
     }
 
-    fn with_help_default_names(self) -> WithHelp<Self::Item, Self> {
-        WithHelp::new_default_names(self)
+    fn with_help_default(self) -> WithHelp<Self::Item, Self> {
+        WithHelp::new_default(self)
     }
 }
 
@@ -597,16 +597,8 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
 }
 
 impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
-    pub fn parse_env(self) -> Result<(T, U), Box<dyn error::Error>> {
-        <Self as Parser>::parse_env(self)
-    }
-
-    pub fn with_help<N: IntoName>(self, name: N) -> WithHelp<(T, U), Self> {
-        WithHelp::new(self, name)
-    }
-
-    pub fn with_help_default_names(self) -> WithHelp<(T, U), Self> {
-        WithHelp::new_default_names(self)
+    pub fn with_help_default(self) -> WithHelp<(T, U), Self> {
+        WithHelp::new_default(self)
     }
 }
 
@@ -635,16 +627,8 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
 }
 
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
-    pub fn parse_env(self) -> Result<U, Box<dyn error::Error>> {
-        <Self as Parser>::parse_env(self)
-    }
-
-    pub fn with_help<N: IntoName>(self, name: N) -> WithHelp<U, Self> {
-        WithHelp::new(self, name)
-    }
-
-    pub fn with_help_default_names(self) -> WithHelp<U, Self> {
-        WithHelp::new_default_names(self)
+    pub fn with_help_default(self) -> WithHelp<U, Self> {
+        WithHelp::new_default(self)
     }
 }
 
@@ -668,7 +652,7 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
             description: "print help message".to_string(),
         }
     }
-    pub fn new_default_names(parser_t: PT) -> Self {
+    pub fn new_default(parser_t: PT) -> Self {
         Self::new(parser_t, 'h').name("help")
     }
     pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
@@ -679,8 +663,8 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
         self.names.add(name.into_name());
         self
     }
-    pub fn parse_env(self) -> Result<OrHelp<T>, Box<dyn error::Error>> {
-        <Self as Parser>::parse_env(self)
+    pub fn parse_env_or_exit(self) -> T {
+        todo!()
     }
 }
 
