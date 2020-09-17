@@ -339,12 +339,6 @@ impl<A: Arity, H: HasParam> Arg<A, H, name_type::Named> {
         self.name_type.add(name.into_name());
         self
     }
-    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
-        self.name(long.as_ref())
-    }
-    pub fn short(self, short: char) -> Self {
-        self.name(short)
-    }
 }
 
 pub trait SingleArgParser {
@@ -675,7 +669,7 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
         }
     }
     pub fn new_default_names(parser_t: PT) -> Self {
-        Self::new(parser_t, 'h').long("help")
+        Self::new(parser_t, 'h').name("help")
     }
     pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
         self.description = description.as_ref().to_string();
@@ -684,12 +678,6 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
     pub fn name<N: IntoName>(mut self, name: N) -> Self {
         self.names.add(name.into_name());
         self
-    }
-    pub fn long<S: AsRef<str>>(self, long: S) -> Self {
-        self.name(long.as_ref())
-    }
-    pub fn short(self, short: char) -> Self {
-        self.name(short)
     }
     pub fn parse_env(self) -> Result<OrHelp<T>, Box<dyn error::Error>> {
         <Self as Parser>::parse_env(self)

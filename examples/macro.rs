@@ -32,9 +32,9 @@ impl Args {
         match (meap::args_map! {
             let {
                 optional_int = opt_opt("INT", 'i');
-                string = pos_req("STRING");
+                string = pos_req("STRING").desc("a string");
                 durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
-                flag = flag('f');
+                flag = flag('f').name("flag-with-a-really-long-name").desc("flag with a really long name");
                 flag_count = flag_count('c');
             } in {
                 Self {
