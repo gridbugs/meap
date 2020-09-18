@@ -20,7 +20,7 @@ impl From<ParsableDuration> for Duration {
 
 #[derive(Debug)]
 struct Args {
-    optional_int: Option<i32>,
+    int: i32,
     string: String,
     durations: Vec<Duration>,
     flag: bool,
@@ -31,14 +31,14 @@ impl Args {
     fn parse() -> Self {
         (meap::args_map! {
             let {
-                optional_int = opt_opt("INT", 'i');
+                int = opt_opt("INT", 'i').with_default(42);
                 string = pos_req("STRING").desc("a string");
                 durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
                 flag = flag('f').name("flag-with-a-really-long-name").desc("flag with a really long name");
                 flag_count = flag_count('c');
             } in {
                 Self {
-                    optional_int,
+                    int,
                     string,
                     durations,
                     flag,

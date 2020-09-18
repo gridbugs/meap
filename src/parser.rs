@@ -579,6 +579,39 @@ impl<V: FromStr, T: From<V>, A: Arity> SingleArgParserHelp
     }
 }
 
+impl<V: FromStr, T: fmt::Display + From<V>>
+    Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>
+{
+    pub fn with_default(self, value: T) -> WithDefaultDisplay<V, T> {
+        WithDefaultDisplay {
+            value_or_description: ValueOrDescription::Value(value),
+            arg: self,
+        }
+    }
+}
+
+impl<V: FromStr, T: From<V>> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named> {
+    pub fn with_default_lazy<F: FnOnce() -> T>(
+        self,
+        description: &str,
+        thunk: F,
+    ) -> WithDefaultLazy<V, T, F> {
+        WithDefaultLazy {
+            thunk: Some(thunk),
+            arg: self,
+            description: description.to_string(),
+        }
+    }
+
+    pub fn with_default_desc(self, description: &str, value: T) -> WithDefaultDescribed<V, T> {
+        WithDefaultDescribed {
+            value: Some(value),
+            arg: self,
+            description: description.to_string(),
+        }
+    }
+}
+
 impl<A: Arity, H: HasParam, N: NameType> Parser for Arg<A, H, N>
 where
     Self: SingleArgParser + SingleArgParserHelp,
@@ -795,12 +828,6 @@ impl Help {
     }
 }
 
-pub struct WithDefaultLazy<V: FromStr, T: From<V>, F: FnOnce() -> T> {
-    thunk: Option<F>,
-    description: String,
-    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-}
-
 enum ValueOrDescription<T> {
     Value(T),
     Description(String),
@@ -808,6 +835,12 @@ enum ValueOrDescription<T> {
 
 pub struct WithDefaultDisplay<V: FromStr, T: fmt::Display + From<V>> {
     value_or_description: ValueOrDescription<T>,
+    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
+}
+
+pub struct WithDefaultLazy<V: FromStr, T: From<V>, F: FnOnce() -> T> {
+    thunk: Option<F>,
+    description: String,
     arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
 }
 
