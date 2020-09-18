@@ -591,23 +591,27 @@ impl<V: FromStr, T: fmt::Display + From<V>>
 }
 
 impl<V: FromStr, T: From<V>> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named> {
-    pub fn with_default_lazy<F: FnOnce() -> T>(
+    pub fn with_default_lazy<F: FnOnce() -> T, D: AsRef<str>>(
         self,
-        description: &str,
+        description: D,
         thunk: F,
     ) -> WithDefaultLazy<V, T, F> {
         WithDefaultLazy {
             thunk: Some(thunk),
             arg: self,
-            description: description.to_string(),
+            description: description.as_ref().to_string(),
         }
     }
 
-    pub fn with_default_desc(self, description: &str, value: T) -> WithDefaultDescribed<V, T> {
+    pub fn with_default_desc<D: AsRef<str>>(
+        self,
+        description: D,
+        value: T,
+    ) -> WithDefaultDescribed<V, T> {
         WithDefaultDescribed {
             value: Some(value),
             arg: self,
-            description: description.to_string(),
+            description: description.as_ref().to_string(),
         }
     }
 }
