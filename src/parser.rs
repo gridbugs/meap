@@ -614,6 +614,13 @@ impl<V: FromStr, T: From<V>> Arg<arity::Optional, has_param::YesVia<V, T>, name_
             description: description.as_ref().to_string(),
         }
     }
+
+    pub fn with_default_parse<S: AsRef<str>>(self, value: S) -> WithDefaultParse<V, T> {
+        WithDefaultParse {
+            value: value.as_ref().to_string(),
+            arg: self,
+        }
+    }
 }
 
 impl<A: Arity, H: HasParam, N: NameType> Parser for Arg<A, H, N>
@@ -854,6 +861,11 @@ pub struct WithDefaultDescribed<V: FromStr, T: From<V>> {
     arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
 }
 
+pub struct WithDefaultParse<V: FromStr, T: From<V>> {
+    value: String,
+    arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
+}
+
 impl<V: FromStr, T: fmt::Display + From<V>> WithDefaultDisplay<V, T> {
     pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
         self.arg.description = Some(description.as_ref().to_string());
@@ -879,6 +891,18 @@ impl<V: FromStr, T: From<V>, F: FnOnce() -> T> WithDefaultLazy<V, T, F> {
 }
 
 impl<V: FromStr, T: From<V>> WithDefaultDescribed<V, T> {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.arg.description = Some(description.as_ref().to_string());
+        self
+    }
+
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.arg.name_type.add(name.into_name());
+        self
+    }
+}
+
+impl<V: FromStr, T: From<V>> WithDefaultParse<V, T> {
     pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
         self.arg.description = Some(description.as_ref().to_string());
         self
@@ -999,6 +1023,45 @@ impl<V: FromStr, T: From<V>> Parser for WithDefaultDescribed<V, T> {
             format!("{} (Default: {})", description, self.description)
         } else {
             format!("Default: {}", self.description)
+        });
+        help.named.push(help_message);
+    }
+}
+
+impl<V: FromStr, T: From<V>> Parser for WithDefaultParse<V, T> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.arg.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        if let Some(value) = self.arg.parse_low_level(ll)? {
+            Ok(value)
+        } else {
+            Ok(self
+                .value
+                .parse::<V>()
+                .map_err(|_| ParseError::UnableToParseArgumentParam {
+                    name: self.arg.name_type.first_name().clone(),
+                    value: self.value.clone(),
+                })?
+                .into())
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        let mut help_message = match self.arg.help_message() {
+            ArgHelp::Named(help_named) => help_named,
+            ArgHelp::Positional(_) => panic!("named arg gave positional help message"),
+        };
+        help_message.description = Some(if let Some(description) = help_message.description {
+            format!("{} (Default: {})", description, self.value)
+        } else {
+            format!("Default: {}", self.value)
         });
         help.named.push(help_message);
     }
