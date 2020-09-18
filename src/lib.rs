@@ -2,8 +2,8 @@ pub mod low_level;
 pub mod parser;
 
 pub mod prelude {
+    pub use crate::parser::Parser;
     use crate::parser::*;
-    pub use crate::parser::{NamedArgWrapper, Parser};
     use std::str::FromStr;
 
     pub fn pos_opt<T: FromStr>(

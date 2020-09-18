@@ -833,17 +833,6 @@ enum ValueOrDescription<T> {
     Description(String),
 }
 
-pub trait NamedArgWrapper<A: Arity, H: HasParam>: Sized {
-    fn update_arg<F: FnOnce(Arg<A, H, name_type::Named>) -> Arg<A, H, name_type::Named>>(
-        self,
-        f: F,
-    ) -> Self;
-
-    fn name<N: IntoName>(self, name: N) -> Self {
-        self.update_arg(|arg| arg.name(name))
-    }
-}
-
 pub struct WithDefaultDisplay<V: FromStr, T: fmt::Display + From<V>> {
     value_or_description: ValueOrDescription<T>,
     arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
@@ -861,50 +850,38 @@ pub struct WithDefaultDescribed<V: FromStr, T: From<V>> {
     arg: Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
 }
 
-impl<V: FromStr, T: fmt::Display + From<V>>
-    NamedArgWrapper<arity::Optional, has_param::YesVia<V, T>> for WithDefaultDisplay<V, T>
-{
-    fn update_arg<
-        F: FnOnce(
-            Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-        ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-    >(
-        mut self,
-        f: F,
-    ) -> Self {
-        self.arg = f(self.arg);
+impl<V: FromStr, T: fmt::Display + From<V>> WithDefaultDisplay<V, T> {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.arg.description = Some(description.as_ref().to_string());
+        self
+    }
+
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.arg.name_type.add(name.into_name());
         self
     }
 }
 
-impl<V: FromStr, T: From<V>, F: FnOnce() -> T>
-    NamedArgWrapper<arity::Optional, has_param::YesVia<V, T>> for WithDefaultLazy<V, T, F>
-{
-    fn update_arg<
-        G: FnOnce(
-            Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-        ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-    >(
-        mut self,
-        f: G,
-    ) -> Self {
-        self.arg = f(self.arg);
+impl<V: FromStr, T: From<V>, F: FnOnce() -> T> WithDefaultLazy<V, T, F> {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.arg.description = Some(description.as_ref().to_string());
+        self
+    }
+
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.arg.name_type.add(name.into_name());
         self
     }
 }
 
-impl<V: FromStr, T: From<V>> NamedArgWrapper<arity::Optional, has_param::YesVia<V, T>>
-    for WithDefaultDescribed<V, T>
-{
-    fn update_arg<
-        F: FnOnce(
-            Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-        ) -> Arg<arity::Optional, has_param::YesVia<V, T>, name_type::Named>,
-    >(
-        mut self,
-        f: F,
-    ) -> Self {
-        self.arg = f(self.arg);
+impl<V: FromStr, T: From<V>> WithDefaultDescribed<V, T> {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.arg.description = Some(description.as_ref().to_string());
+        self
+    }
+
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.arg.name_type.add(name.into_name());
         self
     }
 }
