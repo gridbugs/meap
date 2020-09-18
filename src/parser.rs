@@ -1071,6 +1071,7 @@ impl fmt::Display for Help {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         const ARG_SINGLE_LINE_MAX_ARG_LENGTH: usize = 16;
         const OPT_SINGLE_LINE_MAX_ARG_LENGTH: usize = 32;
+        const DESCRIPTION_LEFT_PAD: usize = 4;
         write!(f, "Usage: {} [OPTIONS]", self.program_name)?;
         for p in &self.positional {
             match p.arity {
@@ -1080,22 +1081,41 @@ impl fmt::Display for Help {
             }
         }
         if !self.positional.is_empty() {
+            let parts = self
+                .positional
+                .iter()
+                .map(|p| {
+                    let hint = match p.arity {
+                        ArityEnum::Required => format!("{}", p.hint),
+                        ArityEnum::Optional => format!("[{}]", p.hint),
+                        ArityEnum::Multiple => format!("[{} ...]", p.hint),
+                    };
+                    (hint, p.description.as_ref())
+                })
+                .collect::<Vec<_>>();
+            let max_hint_width = parts
+                .iter()
+                .filter_map(|p| {
+                    if p.0.len() < ARG_SINGLE_LINE_MAX_ARG_LENGTH {
+                        Some(p.0.len())
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .unwrap_or(0)
+                + DESCRIPTION_LEFT_PAD;
             write!(f, "\n\nArgs:")?;
-            for p in &self.positional {
+            for (hint, description) in parts {
                 writeln!(f)?;
-                let hint = match p.arity {
-                    ArityEnum::Required => format!("{}", p.hint),
-                    ArityEnum::Optional => format!("[{}]", p.hint),
-                    ArityEnum::Multiple => format!("[{} ...]", p.hint),
-                };
-                if let Some(description) = p.description.as_ref() {
+                if let Some(description) = description {
                     if hint.len() < ARG_SINGLE_LINE_MAX_ARG_LENGTH {
                         write!(
                             f,
                             "    {:width$} {}",
                             hint,
                             description,
-                            width = ARG_SINGLE_LINE_MAX_ARG_LENGTH,
+                            width = max_hint_width,
                         )?;
                     } else {
                         writeln!(f, "    {}", hint)?;
@@ -1107,39 +1127,60 @@ impl fmt::Display for Help {
             }
         }
         if !self.named.is_empty() {
+            let parts = self
+                .named
+                .iter()
+                .map(|n| {
+                    let name_list = n
+                        .names
+                        .names()
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let name_list_with_arity = match (n.arity, n.hint.as_ref()) {
+                        (ArityEnum::Required, None) => format!("{}", name_list),
+                        (ArityEnum::Optional, None) => format!("[{}]", name_list),
+                        (ArityEnum::Multiple, None) => format!("[{} ...]", name_list),
+                        (ArityEnum::Required, Some(hint)) => format!("{} {}", name_list, hint),
+                        (ArityEnum::Optional, Some(hint)) => format!("[{} {}]", name_list, hint),
+                        (ArityEnum::Multiple, Some(hint)) => {
+                            format!("[{} {} ...]", name_list, hint)
+                        }
+                    };
+                    (name_list_with_arity, n.description.as_ref())
+                })
+                .collect::<Vec<_>>();
+            let max_name_list_width = parts
+                .iter()
+                .filter_map(|p| {
+                    if p.0.len() < OPT_SINGLE_LINE_MAX_ARG_LENGTH {
+                        Some(p.0.len())
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .unwrap_or(0)
+                + DESCRIPTION_LEFT_PAD;
             write!(f, "\n\nOptions:")?;
-            for n in &self.named {
+            for (name_list, description) in parts {
                 writeln!(f)?;
-                let name_list = n
-                    .names
-                    .names()
-                    .iter()
-                    .map(|name| name.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let name_list_with_arity = match (n.arity, n.hint.as_ref()) {
-                    (ArityEnum::Required, None) => format!("{}", name_list),
-                    (ArityEnum::Optional, None) => format!("[{}]", name_list),
-                    (ArityEnum::Multiple, None) => format!("[{} ...]", name_list),
-                    (ArityEnum::Required, Some(hint)) => format!("{} {}", name_list, hint),
-                    (ArityEnum::Optional, Some(hint)) => format!("[{} {}]", name_list, hint),
-                    (ArityEnum::Multiple, Some(hint)) => format!("[{} {} ...]", name_list, hint),
-                };
-                if let Some(description) = n.description.as_ref() {
+                if let Some(description) = description {
                     if name_list.len() < OPT_SINGLE_LINE_MAX_ARG_LENGTH {
                         write!(
                             f,
                             "    {:width$} {}",
-                            name_list_with_arity,
+                            name_list,
                             description,
-                            width = OPT_SINGLE_LINE_MAX_ARG_LENGTH,
+                            width = max_name_list_width,
                         )?;
                     } else {
-                        writeln!(f, "    {}", name_list_with_arity)?;
+                        writeln!(f, "    {}", name_list)?;
                         write!(f, "                {}", description)?;
                     }
                 } else {
-                    write!(f, "    {}", name_list_with_arity)?;
+                    write!(f, "    {}", name_list)?;
                 }
             }
         }
