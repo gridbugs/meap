@@ -31,7 +31,7 @@ impl Args {
     fn parse() -> Self {
         (meap::args_map! {
             let {
-                int = opt_opt("INT", 'i').with_default(42);
+                int = opt_opt("INT", 'i').with_default(42).name("int");
                 string = pos_req("STRING").desc("a string");
                 durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
                 flag = flag('f').name("flag-with-a-really-long-name").desc("flag with a really long name");
