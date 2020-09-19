@@ -238,6 +238,10 @@ pub trait Parser: Sized {
         }
     }
 
+    fn choose_at_most_one<O: Parser>(self, other: O) -> ChooseAtMostOne<Self, O> {
+        ChooseAtMostOne(self, other)
+    }
+
     fn with_general_default_lazy<T, F: FnOnce() -> T>(
         self,
         f: F,
@@ -1057,13 +1061,10 @@ impl<V: FromStr, T: From<V>, D: DefaultValue<Item = T>> WithDefault<V, T, D> {
     }
 }
 
-pub struct ChooseAtMostOne<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>>(
-    pub PA,
-    pub PB,
-);
+pub struct ChooseAtMostOne<PA: Parser, PB: Parser>(PA, PB);
 
 impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> Parser
-    for ChooseAtMostOne<T, PA, PB>
+    for ChooseAtMostOne<PA, PB>
 {
     type Item = Option<T>;
 
@@ -1089,36 +1090,6 @@ impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> Parser
     fn update_help(&self, help: &mut Help) {
         self.0.update_help(help);
         self.1.update_help(help);
-    }
-}
-
-impl<V: FromStr, T: From<V>, N: NameType> Arg<arity::Optional, has_param::YesVia<V, T>, N>
-where
-    Self: SingleArgParser<SingleArgItem = Option<T>> + SingleArgParserHelp,
-{
-    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
-        self,
-        other: O,
-    ) -> ChooseAtMostOne<T, Self, O> {
-        ChooseAtMostOne(self, other)
-    }
-}
-
-impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> ChooseAtMostOne<T, PA, PB> {
-    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
-        self,
-        other: O,
-    ) -> ChooseAtMostOne<T, Self, O> {
-        ChooseAtMostOne(self, other)
-    }
-}
-
-impl<T> SomeIf<T> {
-    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
-        self,
-        other: O,
-    ) -> ChooseAtMostOne<T, Self, O> {
-        ChooseAtMostOne(self, other)
     }
 }
 
