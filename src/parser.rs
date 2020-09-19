@@ -1121,6 +1121,18 @@ impl<T> Parser for SomeIf<T> {
     }
 }
 
+impl<T> SomeIf<T> {
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.arg.description = Some(description.as_ref().to_string());
+        self
+    }
+
+    pub fn name<N: IntoName>(mut self, name: N) -> Self {
+        self.arg.name_type.add(name.into_name());
+        self
+    }
+}
+
 pub struct WithDefaultGeneral<T, P: Parser> {
     value: Option<T>,
     parser: P,
