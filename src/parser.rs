@@ -774,7 +774,22 @@ impl<T, PT: Parser<Item = T>> Id<PT> {
     }
 
     pub fn with_help_default(self) -> WithHelp<T, Self> {
-        WithHelp::new_default(self)
+        Parser::with_help_default(self)
+    }
+
+    pub fn with_general_default(self, value: T) -> WithGeneralDefault<T, Self> {
+        Parser::with_general_default(self, value)
+    }
+
+    pub fn with_general_default_lazy<F: FnOnce() -> T>(
+        self,
+        f: F,
+    ) -> WithGeneralDefaultLazy<T, F, Self> {
+        Parser::with_general_default_lazy(self, f)
+    }
+
+    pub fn required<S: AsRef<str>>(self, error_message: S) -> GeneralRequired<Self> {
+        Parser::required(self, error_message)
     }
 }
 
