@@ -2,7 +2,7 @@ pub mod low_level;
 pub mod parser;
 
 pub use parser::Parser;
-pub type ArgsMap<T> = parser::Id<T>;
+pub type LetMap<T> = parser::Id<T>;
 
 pub mod prelude {
     pub use crate::parser::Parser;
