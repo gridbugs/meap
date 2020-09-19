@@ -680,12 +680,6 @@ impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Parser for Both<T, U, PT,
     }
 }
 
-impl<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> Both<T, U, PT, PU> {
-    pub fn with_help_default(self) -> WithHelp<(T, U), Self> {
-        WithHelp::new_default(self)
-    }
-}
-
 pub struct Map<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> {
     f: Option<F>,
     parser_t: PT,
@@ -712,8 +706,35 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     }
 }
 
-impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
-    pub fn with_help_default(self) -> WithHelp<U, Self> {
+pub struct Id<PT> {
+    parser_t: PT,
+}
+
+impl<T, PT: Parser<Item = T>> Parser for Id<PT> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser_t.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        self.parser_t.parse_low_level(ll)
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.parser_t.update_help(help);
+    }
+}
+
+impl<T, PT: Parser<Item = T>> Id<PT> {
+    pub fn new(parser_t: PT) -> Self {
+        Self { parser_t }
+    }
+
+    pub fn with_help_default(self) -> WithHelp<T, Self> {
         WithHelp::new_default(self)
     }
 }

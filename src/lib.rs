@@ -2,6 +2,7 @@ pub mod low_level;
 pub mod parser;
 
 pub use parser::Parser;
+pub type ArgsMap<T> = parser::Id<T>;
 
 pub mod prelude {
     pub use crate::parser::Parser;
@@ -179,9 +180,11 @@ macro_rules! args_map {
     ( let { $var1:ident = $a1:expr; $($var:ident = $a:expr;)+ } in { $b:expr } ) => {
         {
             use $crate::prelude::*;
-            { $crate::args_all! {
-                                    $a1, $($a),*
-                                } } .map(|($var1, $($var),*)| $b)
+            $crate::parser::Id::new(
+                { $crate::args_all! {
+                                        $a1, $($a),*
+                                    } } .map(|($var1, $($var),*)| $b)
+            )
         }
     };
 }
