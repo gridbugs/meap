@@ -65,6 +65,8 @@ pub enum ParseError {
     ExpectedOneArgument(Name),
     UnableToParsePositionalArgumentParam { hint: String, value: String },
     UnableToParseArgumentParam { name: Name, value: String },
+    MultipleMutuallyExclusiveOptionsChosen,
+    MissingRequiredArgumentGeneral(String),
 }
 
 impl fmt::Display for ParseError {
@@ -101,6 +103,10 @@ impl fmt::Display for ParseError {
                 "Unable to parse value \"{}\" given for argument \"{}\"",
                 value, name
             ),
+            Self::MultipleMutuallyExclusiveOptionsChosen => {
+                write!(f, "Multiple mutually-exclusive options chosen")
+            }
+            Self::MissingRequiredArgumentGeneral(error) => write!(f, "{}", error),
         }
     }
 }
@@ -223,6 +229,30 @@ pub trait Parser: Sized {
 
     fn with_help_default(self) -> WithHelp<Self::Item, Self> {
         WithHelp::new_default(self)
+    }
+
+    fn with_general_default(self, value: Self::Item) -> WithGeneralDefault<Self::Item, Self> {
+        WithGeneralDefault {
+            value: Some(value),
+            parser: self,
+        }
+    }
+
+    fn with_general_default_lazy<F: FnOnce() -> Self::Item>(
+        self,
+        f: F,
+    ) -> WithGeneralDefaultLazy<Self::Item, F, Self> {
+        WithGeneralDefaultLazy {
+            value: Some(f),
+            parser: self,
+        }
+    }
+
+    fn required<S: AsRef<str>>(self, error_message: S) -> GeneralRequired<Self> {
+        GeneralRequired {
+            parser: self,
+            error_message: error_message.as_ref().to_string(),
+        }
     }
 }
 
@@ -378,6 +408,15 @@ impl<A: Arity, H: HasParam> Arg<A, H, name_type::Named> {
     pub fn name<N: IntoName>(mut self, name: N) -> Self {
         self.name_type.add(name.into_name());
         self
+    }
+}
+
+impl Arg<arity::Optional, has_param::No, name_type::Named> {
+    pub fn some_if<T>(self, value: T) -> SomeIf<T> {
+        SomeIf {
+            value: Some(value),
+            arg: self,
+        }
     }
 }
 
@@ -1085,6 +1124,183 @@ impl<V: FromStr, T: From<V>> Parser for WithDefaultParse<V, T> {
             format!("Default: {}", self.value)
         });
         help.named.push(help_message);
+    }
+}
+
+pub struct ChooseAtMostOne<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>>(
+    pub PA,
+    pub PB,
+);
+
+impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> Parser
+    for ChooseAtMostOne<T, PA, PB>
+{
+    type Item = Option<T>;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.0.register_low_level(ll)?;
+        self.1.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        let a = self.0.parse_low_level(ll)?;
+        let b = self.1.parse_low_level(ll)?;
+        match (a, b) {
+            (Some(_), Some(_)) => Err(ParseError::MultipleMutuallyExclusiveOptionsChosen.into()),
+            (Some(a), None) => Ok(Some(a)),
+            (None, Some(b)) => Ok(Some(b)),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.0.update_help(help);
+        self.1.update_help(help);
+    }
+}
+
+impl<V: FromStr, T: From<V>, N: NameType> Arg<arity::Optional, has_param::YesVia<V, T>, N>
+where
+    Self: SingleArgParser<SingleArgItem = Option<T>> + SingleArgParserHelp,
+{
+    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
+        self,
+        other: O,
+    ) -> ChooseAtMostOne<T, Self, O> {
+        ChooseAtMostOne(self, other)
+    }
+}
+
+impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> ChooseAtMostOne<T, PA, PB> {
+    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
+        self,
+        other: O,
+    ) -> ChooseAtMostOne<T, Self, O> {
+        ChooseAtMostOne(self, other)
+    }
+}
+
+impl<T> SomeIf<T> {
+    pub fn choose_at_most_one<O: Parser<Item = Option<T>>>(
+        self,
+        other: O,
+    ) -> ChooseAtMostOne<T, Self, O> {
+        ChooseAtMostOne(self, other)
+    }
+}
+
+pub struct SomeIf<T> {
+    value: Option<T>,
+    arg: Arg<arity::Optional, has_param::No, name_type::Named>,
+}
+
+impl<T> Parser for SomeIf<T> {
+    type Item = Option<T>;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.arg.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        if self.arg.parse_low_level(ll)? {
+            Ok(Some(self.value.take().expect("value already used")))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.arg.update_help(help);
+    }
+}
+
+pub struct WithGeneralDefault<T, P: Parser> {
+    value: Option<T>,
+    parser: P,
+}
+
+impl<T, P: Parser<Item = Option<T>>> Parser for WithGeneralDefault<T, P> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        if let Some(value) = self.parser.parse_low_level(ll)? {
+            Ok(value)
+        } else {
+            Ok(self.value.take().expect("value already used"))
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.parser.update_help(help);
+    }
+}
+
+pub struct WithGeneralDefaultLazy<T, F: FnOnce() -> T, P: Parser> {
+    value: Option<F>,
+    parser: P,
+}
+
+impl<T, F: FnOnce() -> T, P: Parser<Item = Option<T>>> Parser for WithGeneralDefaultLazy<T, F, P> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        if let Some(value) = self.parser.parse_low_level(ll)? {
+            Ok(value)
+        } else {
+            Ok((self.value.take().expect("function already called"))())
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.parser.update_help(help);
+    }
+}
+
+pub struct GeneralRequired<P: Parser> {
+    parser: P,
+    error_message: String,
+}
+
+impl<T, P: Parser<Item = Option<T>>> Parser for GeneralRequired<P> {
+    type Item = T;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        if let Some(value) = self.parser.parse_low_level(ll)? {
+            Ok(value)
+        } else {
+            Err(ParseError::MissingRequiredArgumentGeneral(self.error_message.clone()).into())
+        }
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.parser.update_help(help);
     }
 }
 

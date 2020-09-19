@@ -157,7 +157,7 @@ macro_rules! unflatten_closure {
 }
 
 #[macro_export]
-macro_rules! args_all {
+macro_rules! all {
     ( $only:expr ) => {
         $only
     };
@@ -170,20 +170,42 @@ macro_rules! args_all {
 }
 
 #[macro_export]
-macro_rules! args_map {
+macro_rules! let_map {
     ( let { $var1:ident = $a1:expr; } in { $b:expr } ) => {
         {
             use $crate::prelude::*;
-            $a1.map(|$var1| $b)
+            $crate::parser::Id::new(
+                $a1.map(|$var1| $b)
+            )
         }
     };
     ( let { $var1:ident = $a1:expr; $($var:ident = $a:expr;)+ } in { $b:expr } ) => {
         {
             use $crate::prelude::*;
             $crate::parser::Id::new(
-                { $crate::args_all! {
+                { $crate::all! {
                                         $a1, $($a),*
                                     } } .map(|($var1, $($var),*)| $b)
+            )
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! choose_at_most_one {
+    ( $only:expr ) => {
+        {
+            use $crate::prelude::*;
+            $crate::parser::Id::new(
+                $only
+            )
+        }
+    };
+    ( $head:expr, $($tail:expr),* $(,)* ) => {
+        {
+            use $crate::prelude::*;
+            $crate::parser::Id::new(
+                $head $( .choose_at_most_one($tail) )*
             )
         }
     };
