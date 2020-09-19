@@ -2,7 +2,6 @@ pub mod low_level;
 pub mod parser;
 
 pub use parser::Parser;
-pub type LetMap<T> = parser::Id<T>;
 
 pub mod prelude {
     pub use crate::parser::Parser;
@@ -157,7 +156,7 @@ macro_rules! unflatten_closure {
 }
 
 #[macro_export]
-macro_rules! all {
+macro_rules! both_map {
     ( $only:expr ) => {
         $only
     };
@@ -174,19 +173,15 @@ macro_rules! let_map {
     ( let { $var1:ident = $a1:expr; } in { $b:expr } ) => {
         {
             use $crate::prelude::*;
-            $crate::parser::Id::new(
-                $a1.map(|$var1| $b)
-            )
+            $a1.map(|$var1| $b)
         }
     };
     ( let { $var1:ident = $a1:expr; $($var:ident = $a:expr;)+ } in { $b:expr } ) => {
         {
             use $crate::prelude::*;
-            $crate::parser::Id::new(
-                { $crate::all! {
-                                        $a1, $($a),*
-                                    } } .map(|($var1, $($var),*)| $b)
-            )
+            { $crate::both_map! {
+                               $a1, $($a),*
+                           } } .map(|($var1, $($var),*)| $b)
         }
     };
 }
@@ -196,17 +191,13 @@ macro_rules! choose_at_most_one {
     ( $only:expr ) => {
         {
             use $crate::prelude::*;
-            $crate::parser::Id::new(
-                $only
-            )
+            $only
         }
     };
     ( $head:expr, $($tail:expr),* $(,)* ) => {
         {
             use $crate::prelude::*;
-            $crate::parser::Id::new(
-                $head $( .choose_at_most_one($tail) )*
-            )
+            $head $( .choose_at_most_one($tail) )*
         }
     };
 }

@@ -745,53 +745,11 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     }
 }
 
-pub struct Id<PT> {
-    parser_t: PT,
-}
-
-impl<T, PT: Parser<Item = T>> Parser for Id<PT> {
-    type Item = T;
-
-    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
-        self.parser_t.register_low_level(ll)
-    }
-
-    fn parse_low_level(
-        &mut self,
-        ll: &mut low_level::LowLevelParserOutput,
-    ) -> Result<Self::Item, Box<dyn error::Error>> {
-        self.parser_t.parse_low_level(ll)
-    }
-
-    fn update_help(&self, help: &mut Help) {
-        self.parser_t.update_help(help);
-    }
-}
-
-impl<T, PT: Parser<Item = T>> Id<PT> {
-    pub fn new(parser_t: PT) -> Self {
-        Self { parser_t }
-    }
-
-    pub fn with_help_default(self) -> WithHelp<T, Self> {
+impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
+    /// Re-expose `Parser::with_help_default` here so it can be called on the output of the
+    /// `let_map!` macro without needing to explicitly use `Parser`.
+    pub fn with_help_default(self) -> WithHelp<U, Self> {
         Parser::with_help_default(self)
-    }
-}
-
-impl<T, PT: Parser<Item = Option<T>>> Id<PT> {
-    pub fn with_general_default(self, value: T) -> WithGeneralDefault<T, Self> {
-        Parser::with_general_default(self, value)
-    }
-
-    pub fn with_general_default_lazy<F: FnOnce() -> T>(
-        self,
-        f: F,
-    ) -> WithGeneralDefaultLazy<T, F, Self> {
-        Parser::with_general_default_lazy(self, f)
-    }
-
-    pub fn required<S: AsRef<str>>(self, error_message: S) -> GeneralRequired<Self> {
-        Parser::required(self, error_message)
     }
 }
 
