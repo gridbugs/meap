@@ -48,7 +48,7 @@ impl Args {
                     flag("red").some_if(Colour::Red),
                     flag("green").some_if(Colour::Green),
                     flag("blue").some_if(Colour::Blue),
-                ).with_general_default(Colour::Red);
+                ).with_default_general(Colour::Red);
             } in {
                 Self {
                     int,

@@ -231,8 +231,8 @@ pub trait Parser: Sized {
         WithHelp::new_default(self)
     }
 
-    fn with_general_default<T>(self, value: T) -> WithGeneralDefault<T, Self> {
-        WithGeneralDefault {
+    fn with_default_general<T>(self, value: T) -> WithDefaultGeneral<T, Self> {
+        WithDefaultGeneral {
             value: Some(value),
             parser: self,
         }
@@ -242,18 +242,18 @@ pub trait Parser: Sized {
         ChooseAtMostOne(self, other)
     }
 
-    fn with_general_default_lazy<T, F: FnOnce() -> T>(
+    fn with_default_lazy_general<T, F: FnOnce() -> T>(
         self,
         f: F,
-    ) -> WithGeneralDefaultLazy<T, F, Self> {
-        WithGeneralDefaultLazy {
+    ) -> WithDefaultLazyGeneral<T, F, Self> {
+        WithDefaultLazyGeneral {
             value: Some(f),
             parser: self,
         }
     }
 
-    fn required<S: AsRef<str>>(self, error_message: S) -> GeneralRequired<Self> {
-        GeneralRequired {
+    fn required_general<S: AsRef<str>>(self, error_message: S) -> RequiredGeneral<Self> {
+        RequiredGeneral {
             parser: self,
             error_message: error_message.as_ref().to_string(),
         }
@@ -1121,12 +1121,12 @@ impl<T> Parser for SomeIf<T> {
     }
 }
 
-pub struct WithGeneralDefault<T, P: Parser> {
+pub struct WithDefaultGeneral<T, P: Parser> {
     value: Option<T>,
     parser: P,
 }
 
-impl<T, P: Parser<Item = Option<T>>> Parser for WithGeneralDefault<T, P> {
+impl<T, P: Parser<Item = Option<T>>> Parser for WithDefaultGeneral<T, P> {
     type Item = T;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
@@ -1149,12 +1149,12 @@ impl<T, P: Parser<Item = Option<T>>> Parser for WithGeneralDefault<T, P> {
     }
 }
 
-pub struct WithGeneralDefaultLazy<T, F: FnOnce() -> T, P: Parser> {
+pub struct WithDefaultLazyGeneral<T, F: FnOnce() -> T, P: Parser> {
     value: Option<F>,
     parser: P,
 }
 
-impl<T, F: FnOnce() -> T, P: Parser<Item = Option<T>>> Parser for WithGeneralDefaultLazy<T, F, P> {
+impl<T, F: FnOnce() -> T, P: Parser<Item = Option<T>>> Parser for WithDefaultLazyGeneral<T, F, P> {
     type Item = T;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
@@ -1177,12 +1177,12 @@ impl<T, F: FnOnce() -> T, P: Parser<Item = Option<T>>> Parser for WithGeneralDef
     }
 }
 
-pub struct GeneralRequired<P: Parser> {
+pub struct RequiredGeneral<P: Parser> {
     parser: P,
     error_message: String,
 }
 
-impl<T, P: Parser<Item = Option<T>>> Parser for GeneralRequired<P> {
+impl<T, P: Parser<Item = Option<T>>> Parser for RequiredGeneral<P> {
     type Item = T;
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
