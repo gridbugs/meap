@@ -231,17 +231,17 @@ pub trait Parser: Sized {
         WithHelp::new_default(self)
     }
 
-    fn with_general_default(self, value: Self::Item) -> WithGeneralDefault<Self::Item, Self> {
+    fn with_general_default<T>(self, value: T) -> WithGeneralDefault<T, Self> {
         WithGeneralDefault {
             value: Some(value),
             parser: self,
         }
     }
 
-    fn with_general_default_lazy<F: FnOnce() -> Self::Item>(
+    fn with_general_default_lazy<T, F: FnOnce() -> T>(
         self,
         f: F,
-    ) -> WithGeneralDefaultLazy<Self::Item, F, Self> {
+    ) -> WithGeneralDefaultLazy<T, F, Self> {
         WithGeneralDefaultLazy {
             value: Some(f),
             parser: self,
@@ -776,7 +776,9 @@ impl<T, PT: Parser<Item = T>> Id<PT> {
     pub fn with_help_default(self) -> WithHelp<T, Self> {
         Parser::with_help_default(self)
     }
+}
 
+impl<T, PT: Parser<Item = Option<T>>> Id<PT> {
     pub fn with_general_default(self, value: T) -> WithGeneralDefault<T, Self> {
         Parser::with_general_default(self, value)
     }

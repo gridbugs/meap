@@ -44,11 +44,11 @@ impl Args {
                 durations = pos_multi_via::<ParsableDuration, Duration>("DURATION");
                 flag = flag('f').name("flag-with-a-really-long-name").desc("flag with a really long name");
                 flag_count = flag_count('c');
-                colour = meap::choose_at_most_one! {
+                colour = meap::choose_at_most_one!(
                     flag("red").some_if(Colour::Red),
                     flag("green").some_if(Colour::Green),
                     flag("blue").some_if(Colour::Blue),
-                }.required("a colour must be specified");
+                ).with_general_default(Colour::Red);
             } in {
                 Self {
                     int,
