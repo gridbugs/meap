@@ -1,6 +1,8 @@
 pub mod low_level;
 pub mod parser;
 
+pub use parser::Parser;
+
 pub mod prelude {
     pub use crate::parser::Parser;
     use crate::parser::*;
