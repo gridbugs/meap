@@ -169,6 +169,16 @@ macro_rules! both_map {
 }
 
 #[macro_export]
+macro_rules! all {
+    ( $head:expr, $($tail:expr),* $(,)* ) => {
+        {
+        use $crate::prelude::*;
+        $crate::both_map!($head, $($tail),*)
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! let_map {
     ( let { $var1:ident = $a1:expr; } in { $b:expr } ) => {
         {

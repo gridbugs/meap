@@ -20,3 +20,6 @@ name = "basic"
 
 [[example]]
 name = "macro"
+
+[[example]]
+name = "all"
