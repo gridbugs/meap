@@ -1063,6 +1063,32 @@ impl<V: FromStr, T: From<V>, D: DefaultValue<Item = T>> WithDefault<V, T, D> {
 
 pub struct ChooseAtMostOne<PA: Parser, PB: Parser>(PA, PB);
 
+impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> ChooseAtMostOne<PA, PB> {
+    pub fn with_default_general(self, value: T) -> WithDefaultGeneral<T, Self> {
+        WithDefaultGeneral {
+            value: Some(value),
+            parser: self,
+        }
+    }
+
+    pub fn with_default_lazy_general<F: FnOnce() -> T>(
+        self,
+        f: F,
+    ) -> WithDefaultLazyGeneral<T, F, Self> {
+        WithDefaultLazyGeneral {
+            value: Some(f),
+            parser: self,
+        }
+    }
+
+    pub fn required_general<S: AsRef<str>>(self, error_message: S) -> RequiredGeneral<Self> {
+        RequiredGeneral {
+            parser: self,
+            error_message: error_message.as_ref().to_string(),
+        }
+    }
+}
+
 impl<T, PA: Parser<Item = Option<T>>, PB: Parser<Item = Option<T>>> Parser
     for ChooseAtMostOne<PA, PB>
 {
