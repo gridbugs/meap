@@ -6,8 +6,8 @@ authors = ["Stephen Sherratt <stephen@sherra.tt>"]
 edition = "2018"
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/stevebob/meap.git"
-repository = "https://github.com/stevebob/meap.git"
+homepage = "https://github.com/gridbugs/meap.git"
+repository = "https://github.com/gridbugs/meap.git"
 documentation = "https://docs.rs/meap"
 
 [dependencies]
