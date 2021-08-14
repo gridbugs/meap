@@ -768,6 +768,7 @@ pub struct WithHelp<T, PT: Parser<Item = T>> {
     parser_t: PT,
     names: name_type::Named,
     description: String,
+    program_description: Option<String>,
 }
 
 impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
@@ -776,6 +777,7 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
             parser_t,
             names: name_type::Named::new(name),
             description: "print help message".to_string(),
+            program_description: None,
         }
     }
     pub fn new_default(parser_t: PT) -> Self {
@@ -789,15 +791,22 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
         self.names.add(name.into_name());
         self
     }
-    pub fn parse_env_or_exit(self) -> T {
+    pub fn with_program_description<S: AsRef<str>>(mut self, program_description: S) -> Self {
+        self.program_description = Some(program_description.as_ref().to_string());
+        self
+    }
+    pub fn parse_env_or_exit(mut self) -> T {
+        let program_description = self.program_description.take();
         match self.parse_env() {
             Ok(OrHelp::Value(item)) => item,
-            Ok(OrHelp::Help(help)) => {
+            Ok(OrHelp::Help(mut help)) => {
+                help.program_description = program_description;
                 println!("{}", help);
                 process::exit(0);
             }
             Err((error, spent_parser)) => {
-                let help = spent_parser.into_help();
+                let mut help = spent_parser.into_help();
+                help.program_description = program_description;
                 eprintln!("{}\n", error);
                 eprintln!("{}", help);
                 process::exit(2);
@@ -865,6 +874,7 @@ pub enum ArgHelp {
 #[derive(Debug)]
 pub struct Help {
     pub program_name: String,
+    pub program_description: Option<String>,
     pub positional: Vec<ArgHelpPositional>,
     pub named: Vec<ArgHelpNamed>,
 }
@@ -873,6 +883,7 @@ impl Help {
     pub fn new(program_name: String) -> Self {
         Self {
             program_name,
+            program_description: None,
             positional: Vec::new(),
             named: Vec::new(),
         }
@@ -1281,6 +1292,9 @@ impl fmt::Display for Help {
                 .max()
                 .unwrap_or(0)
                 + DESCRIPTION_LEFT_PAD;
+            if let Some(program_description) = self.program_description.as_ref() {
+                write!(f, "\n{}", program_description)?;
+            }
             write!(f, "\n\nArgs:")?;
             for (hint, description) in parts {
                 writeln!(f)?;

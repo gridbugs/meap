@@ -5,6 +5,7 @@ fn main() {
         pos_req::<String>("FOO"),
     }
     .with_help_default()
+    .with_program_description("example program")
     .parse_env_or_exit();
     println!("{:?} {:?} {:?}", a, b, c);
 }
