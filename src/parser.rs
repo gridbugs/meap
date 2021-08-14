@@ -1267,6 +1267,9 @@ impl fmt::Display for Help {
                 ArityEnum::Multiple => write!(f, " [{} ...]", p.hint)?,
             }
         }
+        if let Some(program_description) = self.program_description.as_ref() {
+            write!(f, "\n{}", program_description)?;
+        }
         if !self.positional.is_empty() {
             let parts = self
                 .positional
@@ -1292,9 +1295,6 @@ impl fmt::Display for Help {
                 .max()
                 .unwrap_or(0)
                 + DESCRIPTION_LEFT_PAD;
-            if let Some(program_description) = self.program_description.as_ref() {
-                write!(f, "\n{}", program_description)?;
-            }
             write!(f, "\n\nArgs:")?;
             for (hint, description) in parts {
                 writeln!(f)?;
