@@ -447,6 +447,15 @@ pub mod name_type {
         pub fn first_name(&self) -> &Name {
             &self.names[0]
         }
+        pub fn from_slice(names: &[Name]) -> Option<Self> {
+            if names.is_empty() {
+                None
+            } else {
+                Some(Self {
+                    names: names.to_vec(),
+                })
+            }
+        }
     }
 }
 
@@ -883,6 +892,28 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
 pub enum OrHelp<T> {
     Value(T),
     Help(Help),
+    Version(Version),
+}
+
+#[derive(Debug)]
+pub struct Version {
+    pub version: Option<String>,
+    pub description: Option<String>,
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        if let Some(version) = self.version.as_ref() {
+            writeln!(f, "{}", version)?;
+        }
+        if let Some(description) = self.description.as_ref() {
+            writeln!(f, "{}", description)?;
+        }
+        if self.version.is_none() && self.description.is_none() {
+            writeln!(f, "unknown")?;
+        }
+        Ok(())
+    }
 }
 
 pub struct WithHelp<T, PT: Parser<Item = T>> {
@@ -890,6 +921,10 @@ pub struct WithHelp<T, PT: Parser<Item = T>> {
     names: name_type::Named,
     description: String,
     program_description: Option<String>,
+    version: Option<String>,
+    version_description: Option<String>,
+    version_help_description: String,
+    version_names: Vec<Name>,
 }
 
 impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
@@ -899,6 +934,10 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
             names: name_type::Named::new(name),
             description: "print help message".to_string(),
             program_description: None,
+            version: None,
+            version_description: None,
+            version_help_description: "print version information".to_string(),
+            version_names: Vec::new(),
         }
     }
     pub fn new_default(parser_t: PT) -> Self {
@@ -925,6 +964,10 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
                 println!("{}", help);
                 process::exit(0);
             }
+            Ok(OrHelp::Version(version)) => {
+                print!("{}", version);
+                process::exit(0);
+            }
             Err((error, spent_parser)) => {
                 let mut help = spent_parser.into_help();
                 help.program_description = program_description;
@@ -934,6 +977,35 @@ impl<T, PT: Parser<Item = T>> WithHelp<T, PT> {
             }
         }
     }
+
+    pub fn with_version<S: AsRef<str>>(mut self, version: S) -> Self {
+        self.version = Some(version.as_ref().to_string());
+        self
+    }
+
+    pub fn version_name<N: IntoName>(mut self, name: N) -> Self {
+        self.version_names.push(name.into_name());
+        self
+    }
+
+    pub fn with_version_help_description<S: AsRef<str>>(
+        mut self,
+        version_help_description: S,
+    ) -> Self {
+        self.version_help_description = version_help_description.as_ref().to_string();
+        self
+    }
+
+    pub fn with_version_default<S: AsRef<str>>(self, version: S) -> Self {
+        self.with_version(version)
+            .version_name('v')
+            .version_name("version")
+    }
+
+    pub fn with_version_description<S: AsRef<str>>(mut self, version_description: S) -> Self {
+        self.version_description = Some(version_description.as_ref().to_string());
+        self
+    }
 }
 
 impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
@@ -941,23 +1013,30 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
 
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
         self.parser_t.register_low_level(ll)?;
-        ll.register(self.names.names(), low_level::HasParam::No)
+        ll.register(self.names.names(), low_level::HasParam::No)?;
+        ll.register(&self.version_names, low_level::HasParam::No)?;
+        Ok(())
     }
 
     fn parse_low_level(
         &mut self,
         ll: &mut low_level::LowLevelParserOutput,
     ) -> Result<Self::Item, Box<dyn error::Error>> {
-        match ll.get_flag_count(self.names.names()) {
-            0 => Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?)),
-            1 => {
-                let mut help = Help::new(ll.program_name().to_string());
-                self.update_help(&mut help);
-                for _ in ll.free_iter() {} // drain the free arguments
-                Ok(OrHelp::Help(help))
-            }
-            _ => Err(ParseError::ExpectedOneArgument(self.names.first_name().clone()).into()),
+        if ll.get_flag_count(self.names.names()) > 0 {
+            let mut help = Help::new(ll.program_name().to_string());
+            self.update_help(&mut help);
+            for _ in ll.free_iter() {} // drain the free arguments
+            return Ok(OrHelp::Help(help));
         }
+        if ll.get_flag_count(&self.version_names) > 0 {
+            let version = Version {
+                version: self.version.clone(),
+                description: self.version_description.clone(),
+            };
+            for _ in ll.free_iter() {} // drain the free arguments
+            return Ok(OrHelp::Version(version));
+        }
+        Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?))
     }
 
     fn update_help(&self, help: &mut Help) {
@@ -968,6 +1047,14 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
             description: Some(self.description.clone()),
             arity: ArityEnum::Optional,
         });
+        if let Some(version_names) = name_type::Named::from_slice(&self.version_names) {
+            help.named.push(ArgHelpNamed {
+                names: version_names,
+                hint: None,
+                description: Some(self.version_help_description.clone()),
+                arity: ArityEnum::Optional,
+            });
+        }
     }
 }
 
