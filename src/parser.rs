@@ -1511,9 +1511,9 @@ impl fmt::Display for Help {
             }
         }
         if let Some(extra) = self.extra.as_ref() {
-            write!(f, "\n\nExtra Args:\n    {}", extra.hint)?;
+            write!(f, "\n\nExtra Args:\n    [{} ...]", extra.hint)?;
             if let Some(description) = extra.description.as_ref() {
-                write!(f, ": {}", description)?;
+                write!(f, "    {}", description)?;
             }
         }
         Ok(())
