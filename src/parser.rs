@@ -145,6 +145,44 @@ impl<P: Parser> SpentParser<P> {
     }
 }
 
+pub struct MapOpt<T, U, F: FnOnce(T) -> U, POT: ParserOpt<ItemOpt = T>> {
+    f: Option<F>,
+    parser_opt_t: POT,
+}
+
+impl<T, U, F: FnOnce(T) -> U, POT: ParserOpt<ItemOpt = T>> Parser for MapOpt<T, U, F, POT> {
+    type Item = Option<U>;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        self.parser_opt_t.register_low_level(ll)
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        let f = self.f.take().expect("function has already been called");
+        let opt_t = self.parser_opt_t.parse_low_level(ll)?;
+        let opt_u = opt_t.map(f);
+        Ok(opt_u)
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        self.parser_opt_t.update_help(help);
+    }
+}
+
+pub trait ParserOpt: Parser<Item = Option<Self::ItemOpt>> {
+    type ItemOpt;
+
+    fn map_opt<U, F: FnOnce(Self::ItemOpt) -> U>(self, f: F) -> MapOpt<Self::ItemOpt, U, F, Self> {
+        MapOpt {
+            f: Some(f),
+            parser_opt_t: self,
+        }
+    }
+}
+
 pub trait Parser: Sized {
     type Item;
 
@@ -693,6 +731,13 @@ where
             ArgHelp::Positional(help_positional) => help.positional.push(help_positional),
         }
     }
+}
+
+impl<T, A: Arity, H: HasParam, N: NameType> ParserOpt for Arg<A, H, N>
+where
+    Self: Parser<Item = Option<T>>,
+{
+    type ItemOpt = T;
 }
 
 pub struct Both<T, U, PT: Parser<Item = T>, PU: Parser<Item = U>> {

@@ -4,8 +4,8 @@ pub mod parser;
 pub use parser::Parser;
 
 pub mod prelude {
-    pub use crate::parser::Parser;
     use crate::parser::*;
+    pub use crate::parser::{Parser, ParserOpt};
     use std::str::FromStr;
 
     pub fn pos_opt<T: FromStr>(

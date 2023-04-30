@@ -3,7 +3,7 @@ name = "meap"
 description = "Minimal Extensible Argument Parser"
 version = "0.5.1"
 authors = ["Stephen Sherratt <stephen@sherra.tt>"]
-edition = "2018"
+edition = "2021"
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/gridbugs/meap.git"
@@ -23,3 +23,6 @@ name = "macro"
 
 [[example]]
 name = "all"
+
+[[example]]
+name = "map_opt"
