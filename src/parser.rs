@@ -172,6 +172,10 @@ impl<T, U, F: FnOnce(T) -> U, POT: ParserOpt<ItemOpt = T>> Parser for MapOpt<T, 
     }
 }
 
+impl<T, U, F: FnOnce(T) -> U, POT: ParserOpt<ItemOpt = T>> ParserOpt for MapOpt<T, U, F, POT> {
+    type ItemOpt = U;
+}
+
 pub trait ParserOpt: Parser<Item = Option<Self::ItemOpt>> {
     type ItemOpt;
 
@@ -795,6 +799,10 @@ impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Parser for Map<T, U, F, PT> 
     }
 }
 
+impl<T, U, F: FnOnce(T) -> Option<U>, PT: Parser<Item = T>> ParserOpt for Map<T, Option<U>, F, PT> {
+    type ItemOpt = U;
+}
+
 impl<T, U, F: FnOnce(T) -> U, PT: Parser<Item = T>> Map<T, U, F, PT> {
     /// Re-expose `Parser::with_help_default` here so it can be called on the output of the
     /// `let_map!` macro without needing to explicitly use `Parser`.
@@ -1201,6 +1209,10 @@ impl<T> Parser for SomeIf<T> {
     fn update_help(&self, help: &mut Help) {
         self.arg.update_help(help);
     }
+}
+
+impl<T> ParserOpt for SomeIf<T> {
+    type ItemOpt = T;
 }
 
 impl<T> SomeIf<T> {
