@@ -8,6 +8,10 @@ pub mod prelude {
     pub use crate::parser::{Parser, ParserOpt};
     use std::str::FromStr;
 
+    pub fn extra(hint: &str) -> Extra {
+        Extra::new(hint)
+    }
+
     pub fn pos_opt<T: FromStr>(
         hint: &str,
     ) -> Arg<arity::Optional, has_param::YesVia<T, T>, name_type::Positional> {

@@ -116,6 +116,7 @@ impl error::Error for ParseError {}
 #[derive(Debug)]
 pub enum SpecError {
     NameUsedMultipleTimes(Name),
+    RepeatedUnique(low_level::Unique),
 }
 
 impl fmt::Display for SpecError {
@@ -123,6 +124,22 @@ impl fmt::Display for SpecError {
         match self {
             Self::NameUsedMultipleTimes(name) => {
                 write!(f, "Name used multiple times: {}", name.to_string())
+            }
+            Self::RepeatedUnique(low_level::Unique::PositionalMulti) => {
+                write!(
+                    f,
+                    "More than one parser would consume multiple positional arguments. \
+                    This is an error as the first one would consume all the remaining positional \
+                    arguments, while the other parsers would consume no arguments."
+                )
+            }
+            Self::RepeatedUnique(low_level::Unique::Extra) => {
+                write!(
+                    f,
+                    "More than one parser would consume extra arguments. \
+                    This is an error as the first one would consume all the extra \
+                    arguments, while the other parsers would consume no arguments."
+                )
             }
         }
     }
@@ -307,7 +324,7 @@ pub trait Arity {
     fn arity_enum(&self) -> ArityEnum;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArityEnum {
     Required,
     Optional,
@@ -424,6 +441,46 @@ pub mod name_type {
         pub fn first_name(&self) -> &Name {
             &self.names[0]
         }
+    }
+}
+
+pub struct Extra {
+    help: ExtraHelp,
+}
+
+impl Extra {
+    pub fn new<H: AsRef<str>>(hint: H) -> Self {
+        Self {
+            help: ExtraHelp {
+                hint: hint.as_ref().to_string(),
+                description: None,
+            },
+        }
+    }
+
+    pub fn desc<S: AsRef<str>>(mut self, description: S) -> Self {
+        self.help.description = Some(description.as_ref().to_string());
+        self
+    }
+}
+
+impl Parser for Extra {
+    type Item = Vec<String>;
+
+    fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
+        ll.register_anonymous_unique(low_level::Unique::Extra)?;
+        Ok(())
+    }
+
+    fn parse_low_level(
+        &mut self,
+        ll: &mut low_level::LowLevelParserOutput,
+    ) -> Result<Self::Item, Box<dyn error::Error>> {
+        Ok(ll.extra().to_vec())
+    }
+
+    fn update_help(&self, help: &mut Help) {
+        help.extra = Some(self.help.clone());
     }
 }
 
@@ -718,6 +775,11 @@ where
     fn register_low_level(&self, ll: &mut low_level::LowLevelParser) -> Result<(), SpecError> {
         if let Some(names) = self.name_type.names_to_register() {
             ll.register(names, H::low_level())?;
+        } else {
+            // positional argument
+            if self.arity.arity_enum() == ArityEnum::Multiple {
+                ll.register_anonymous_unique(low_level::Unique::PositionalMulti)?;
+            }
         }
         Ok(())
     }
@@ -903,6 +965,12 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ExtraHelp {
+    pub hint: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct ArgHelpPositional {
     pub hint: String,
@@ -928,6 +996,7 @@ pub enum ArgHelp {
 pub struct Help {
     pub program_name: String,
     pub program_description: Option<String>,
+    pub extra: Option<ExtraHelp>,
     pub positional: Vec<ArgHelpPositional>,
     pub named: Vec<ArgHelpNamed>,
 }
@@ -937,6 +1006,7 @@ impl Help {
         Self {
             program_name,
             program_description: None,
+            extra: None,
             positional: Vec::new(),
             named: Vec::new(),
         }
@@ -1324,6 +1394,9 @@ impl fmt::Display for Help {
                 ArityEnum::Multiple => write!(f, " [{} ...]", p.hint)?,
             }
         }
+        if let Some(extra) = self.extra.as_ref() {
+            write!(f, " -- [{} ...]", extra.hint)?;
+        }
         if let Some(program_description) = self.program_description.as_ref() {
             write!(f, "\n{}", program_description)?;
         }
@@ -1429,6 +1502,12 @@ impl fmt::Display for Help {
                 } else {
                     write!(f, "    {}", name_list)?;
                 }
+            }
+        }
+        if let Some(extra) = self.extra.as_ref() {
+            write!(f, "\n\nExtra Args:\n    {}", extra.hint)?;
+            if let Some(description) = extra.description.as_ref() {
+                write!(f, ": {}", description)?;
             }
         }
         Ok(())

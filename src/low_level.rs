@@ -20,6 +20,8 @@ pub struct LowLevelParser {
     instance_name_to_arg_ref: HashMap<Name, LowLevelArgRef>,
     flag_count: usize,
     opt_count: usize,
+    has_positional_multi: bool,
+    has_extra: bool,
 }
 
 pub struct LowLevelParserOutput {
@@ -28,6 +30,7 @@ pub struct LowLevelParserOutput {
     flags: Vec<usize>,
     opts: Vec<Vec<String>>,
     frees: vec::IntoIter<String>,
+    extra: Vec<String>,
 }
 
 enum Token {
@@ -70,6 +73,12 @@ impl Token {
     }
 }
 
+#[derive(Debug)]
+pub enum Unique {
+    PositionalMulti,
+    Extra,
+}
+
 impl LowLevelParser {
     pub fn new(program_name: String) -> Self {
         Self {
@@ -77,6 +86,8 @@ impl LowLevelParser {
             instance_name_to_arg_ref: HashMap::default(),
             flag_count: 0,
             opt_count: 0,
+            has_positional_multi: false,
+            has_extra: false,
         }
     }
 
@@ -99,6 +110,24 @@ impl LowLevelParser {
         Ok(())
     }
 
+    pub fn register_anonymous_unique(&mut self, unique: Unique) -> Result<(), SpecError> {
+        match unique {
+            Unique::PositionalMulti => {
+                if self.has_positional_multi {
+                    return Err(SpecError::RepeatedUnique(Unique::PositionalMulti));
+                }
+                self.has_positional_multi = true;
+            }
+            Unique::Extra => {
+                if self.has_extra {
+                    return Err(SpecError::RepeatedUnique(Unique::Extra));
+                }
+                self.has_extra = true;
+            }
+        }
+        Ok(())
+    }
+
     pub fn parse<A: IntoIterator<Item = String>>(
         self,
         args: A,
@@ -108,6 +137,8 @@ impl LowLevelParser {
             instance_name_to_arg_ref,
             flag_count,
             opt_count,
+            has_extra: _,
+            has_positional_multi: _,
         } = self;
         let mut flags = vec![0; flag_count];
         let mut opts = Vec::with_capacity(opt_count);
@@ -183,15 +214,13 @@ impl LowLevelParser {
                 }
             }
         }
-        for arg in args_iter {
-            frees.push(arg);
-        }
         Ok(LowLevelParserOutput {
             program_name,
             instance_name_to_arg_ref,
             flags,
             opts,
             frees: frees.into_iter(),
+            extra: args_iter.collect(),
         })
     }
 }
@@ -217,5 +246,9 @@ impl LowLevelParserOutput {
 
     pub fn free_iter(&mut self) -> &mut vec::IntoIter<String> {
         &mut self.frees
+    }
+
+    pub fn extra(&self) -> &[String] {
+        &self.extra
     }
 }
