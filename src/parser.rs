@@ -67,6 +67,7 @@ pub enum ParseError {
     UnableToParseArgumentParam { name: Name, value: String },
     MultipleMutuallyExclusiveOptionsChosen,
     MissingRequiredArgumentGeneral(String),
+    UnexpectedSeparator { extra: Vec<String> },
 }
 
 impl fmt::Display for ParseError {
@@ -107,6 +108,11 @@ impl fmt::Display for ParseError {
                 write!(f, "Multiple mutually-exclusive options chosen")
             }
             Self::MissingRequiredArgumentGeneral(error) => write!(f, "{}", error),
+            Self::UnexpectedSeparator { extra } => write!(
+                f,
+                "Extra arguments following \"--\" would be ignored: {}",
+                extra.join(" ")
+            ),
         }
     }
 }

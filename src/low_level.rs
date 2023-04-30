@@ -137,7 +137,7 @@ impl LowLevelParser {
             instance_name_to_arg_ref,
             flag_count,
             opt_count,
-            has_extra: _,
+            has_extra,
             has_positional_multi: _,
         } = self;
         let mut flags = vec![0; flag_count];
@@ -145,9 +145,20 @@ impl LowLevelParser {
         opts.resize_with(opt_count, Vec::new);
         let mut frees = Vec::new();
         let mut args_iter = args.into_iter();
+        let mut extra = None;
         while let Some(token) = args_iter.next().map(Token::parse) {
             match token {
-                Token::Separator => break,
+                Token::Separator => {
+                    let extra_args = args_iter.collect();
+                    if has_extra {
+                        extra = Some(extra_args);
+                    } else {
+                        return Err(Box::new(ParseError::UnexpectedSeparator {
+                            extra: extra_args,
+                        }));
+                    }
+                    break;
+                }
                 Token::Word(word) => frees.push(word),
                 Token::ShortSequence { first, rest } => {
                     let LowLevelArgRef { index, has_param } = instance_name_to_arg_ref
@@ -214,13 +225,14 @@ impl LowLevelParser {
                 }
             }
         }
+        let extra = extra.unwrap_or_else(Vec::new);
         Ok(LowLevelParserOutput {
             program_name,
             instance_name_to_arg_ref,
             flags,
             opts,
             frees: frees.into_iter(),
-            extra: args_iter.collect(),
+            extra,
         })
     }
 }
