@@ -14,7 +14,7 @@ impl Args {
             let {
                 foo = meap::choose_at_most_one![
                     opt_opt("STRING", 'a').map_opt(Foo::A),
-                    opt_opt("STRINg", 'b')
+                    opt_opt("STRING", 'b')
                         .map(|o| o.map(|s: String| format!("[{}]", s)))
                         .map_opt(Foo::B)
                         .map_opt(|x| x),
