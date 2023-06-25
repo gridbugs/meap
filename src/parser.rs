@@ -1028,13 +1028,15 @@ impl<T, PT: Parser<Item = T>> Parser for WithHelp<T, PT> {
             for _ in ll.free_iter() {} // drain the free arguments
             return Ok(OrHelp::Help(help));
         }
-        if ll.get_flag_count(&self.version_names) > 0 {
-            let version = Version {
-                version: self.version.clone(),
-                description: self.version_description.clone(),
-            };
-            for _ in ll.free_iter() {} // drain the free arguments
-            return Ok(OrHelp::Version(version));
+        if !self.version_names.is_empty() {
+            if ll.get_flag_count(&self.version_names) > 0 {
+                let version = Version {
+                    version: self.version.clone(),
+                    description: self.version_description.clone(),
+                };
+                for _ in ll.free_iter() {} // drain the free arguments
+                return Ok(OrHelp::Version(version));
+            }
         }
         Ok(OrHelp::Value(self.parser_t.parse_low_level(ll)?))
     }
